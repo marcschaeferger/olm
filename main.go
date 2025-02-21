@@ -65,7 +65,7 @@ const (
 	ENV_WG_PROCESS_FOREGROUND = "WG_PROCESS_FOREGROUND"
 )
 
-func ping(dev *device.Device, dst string) error {
+func ping(dst string) error {
 	logger.Info("Pinging %s over WireGuard tunnel", dst)
 
 	// Create a raw socket for ICMP
@@ -145,7 +145,7 @@ func ping(dev *device.Device, dst string) error {
 	return nil
 }
 
-func startPingCheck(dev *device.Device, serverIP string, stopChan chan struct{}) {
+func startPingCheck(serverIP string, stopChan chan struct{}) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -153,7 +153,7 @@ func startPingCheck(dev *device.Device, serverIP string, stopChan chan struct{})
 		for {
 			select {
 			case <-ticker.C:
-				err := ping(dev, serverIP)
+				err := ping(serverIP)
 				if err != nil {
 					logger.Warn("Periodic ping failed: %v", err)
 					logger.Warn("HINT: Check if the WireGuard tunnel is up and the server is reachable")
@@ -166,7 +166,7 @@ func startPingCheck(dev *device.Device, serverIP string, stopChan chan struct{})
 	}()
 }
 
-func pingWithRetry(dev *device.Device, dst string) error {
+func pingWithRetry(dst string) error {
 	const (
 		maxAttempts = 5
 		retryDelay  = 2 * time.Second
@@ -176,7 +176,7 @@ func pingWithRetry(dev *device.Device, dst string) error {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		logger.Info("Ping attempt %d of %d", attempt, maxAttempts)
 
-		if err := ping(dev, dst); err != nil {
+		if err := ping(dst); err != nil {
 			lastErr = err
 			logger.Warn("Ping attempt %d failed: %v", attempt, err)
 
@@ -384,7 +384,7 @@ func main() {
 
 		if connected {
 			logger.Info("Already connected! But I will send a ping anyway...")
-			err := pingWithRetry(dev, wgData.ServerIP)
+			err := pingWithRetry(wgData.ServerIP)
 			if err != nil {
 				// Handle complete failure after all retries
 				logger.Warn("Failed to ping %s: %v", wgData.ServerIP, err)
@@ -464,7 +464,7 @@ persistent_keepalive_interval=5`, fixKey(fmt.Sprintf("%s", privateKey)), fixKey(
 		logger.Info("WireGuard device created. Lets ping the server now...")
 		// Ping to bring the tunnel up on the server side quickly
 		// ping(tnet, wgData.ServerIP)
-		err = pingWithRetry(dev, wgData.ServerIP)
+		err = pingWithRetry(wgData.ServerIP)
 		if err != nil {
 			// Handle complete failure after all retries
 			logger.Error("Failed to ping %s: %v", wgData.ServerIP, err)
@@ -472,7 +472,7 @@ persistent_keepalive_interval=5`, fixKey(fmt.Sprintf("%s", privateKey)), fixKey(
 
 		if !connected {
 			logger.Info("Starting ping check")
-			startPingCheck(dev, wgData.ServerIP, pingStopChan)
+			startPingCheck(wgData.ServerIP, pingStopChan)
 		}
 		connected = true
 	})
