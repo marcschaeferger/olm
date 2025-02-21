@@ -291,10 +291,10 @@ func main() {
 		reachableAt          string
 	)
 
-	// if PANGOLIN_ENDPOINT, CLIENT_ID, and CLIENT_SECRET are set as environment variables, they will be used as default values
+	// if PANGOLIN_ENDPOINT, OLM_ID, and OLM_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
-	id = os.Getenv("CLIENT_ID")
-	secret = os.Getenv("CLIENT_SECRET")
+	id = os.Getenv("OLM_ID")
+	secret = os.Getenv("OLM_SECRET")
 	mtu = os.Getenv("MTU")
 	dns = os.Getenv("DNS")
 	logLevel = os.Getenv("LOG_LEVEL")
@@ -306,10 +306,10 @@ func main() {
 		flag.StringVar(&endpoint, "endpoint", "", "Endpoint of your pangolin server")
 	}
 	if id == "" {
-		flag.StringVar(&id, "id", "", "Client ID")
+		flag.StringVar(&id, "id", "", "Olm ID")
 	}
 	if secret == "" {
-		flag.StringVar(&secret, "secret", "", "Client secret")
+		flag.StringVar(&secret, "secret", "", "Olm secret")
 	}
 	if mtu == "" {
 		flag.StringVar(&mtu, "mtu", "1280", "MTU to use")
@@ -336,7 +336,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("Client version replaceme")
+		fmt.Println("Olm version replaceme")
 		os.Exit(0)
 	}
 
@@ -355,14 +355,14 @@ func main() {
 		logger.Fatal("Failed to generate private key: %v", err)
 	}
 
-	// Create a new client
-	client, err := websocket.NewClient(
+	// Create a new olm
+	olm, err := websocket.NewOlm(
 		id,     // CLI arg takes precedence
 		secret, // CLI arg takes precedence
 		endpoint,
 	)
 	if err != nil {
-		logger.Fatal("Failed to create client: %v", err)
+		logger.Fatal("Failed to create olm: %v", err)
 	}
 
 	// Create TUN device and network stack
@@ -370,16 +370,16 @@ func main() {
 	var connected bool
 	var wgData WgData
 
-	client.RegisterHandler("client/terminate", func(msg websocket.WSMessage) {
+	olm.RegisterHandler("olm/terminate", func(msg websocket.WSMessage) {
 		logger.Info("Received terminate message")
-		client.Close()
+		olm.Close()
 	})
 
 	pingStopChan := make(chan struct{})
 	defer close(pingStopChan)
 
 	// Register handlers for different message types
-	client.RegisterHandler("client/wg/connect", func(msg websocket.WSMessage) {
+	olm.RegisterHandler("olm/wg/connect", func(msg websocket.WSMessage) {
 		logger.Info("Received registration message")
 
 		if connected {
@@ -477,11 +477,11 @@ persistent_keepalive_interval=5`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		connected = true
 	})
 
-	client.OnConnect(func() error {
+	olm.OnConnect(func() error {
 		publicKey := privateKey.PublicKey()
 		logger.Debug("Public key: %s", publicKey)
 
-		err := client.SendMessage("client/wg/register", map[string]interface{}{
+		err := olm.SendMessage("olm/wg/register", map[string]interface{}{
 			"publicKey": publicKey.String(),
 		})
 		if err != nil {
@@ -494,10 +494,10 @@ persistent_keepalive_interval=5`, fixKey(privateKey.String()), fixKey(wgData.Pub
 	})
 
 	// Connect to the WebSocket server
-	if err := client.Connect(); err != nil {
+	if err := olm.Connect(); err != nil {
 		logger.Fatal("Failed to connect to server: %v", err)
 	}
-	defer client.Close()
+	defer olm.Close()
 
 	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)
