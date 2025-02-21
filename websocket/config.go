@@ -1,0 +1,72 @@
+package websocket
+
+import (
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime"
+)
+
+func getConfigPath() string {
+	var configDir string
+	switch runtime.GOOS {
+	case "darwin":
+		configDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "olm-client")
+	case "windows":
+		configDir = filepath.Join(os.Getenv("APPDATA"), "olm-client")
+	default: // linux and others
+		configDir = filepath.Join(os.Getenv("HOME"), ".config", "olm-client")
+	}
+
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		log.Printf("Failed to create config directory: %v", err)
+	}
+
+	return filepath.Join(configDir, "config.json")
+}
+
+func (c *Client) loadConfig() error {
+	if c.config.OlmID != "" && c.config.Secret != "" && c.config.Endpoint != "" {
+		return nil
+	}
+
+	configPath := getConfigPath()
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return err
+	}
+
+	if c.config.OlmID == "" {
+		c.config.OlmID = config.OlmID
+	}
+	if c.config.Token == "" {
+		c.config.Token = config.Token
+	}
+	if c.config.Secret == "" {
+		c.config.Secret = config.Secret
+	}
+	if c.config.Endpoint == "" {
+		c.config.Endpoint = config.Endpoint
+		c.baseURL = config.Endpoint
+	}
+
+	return nil
+}
+
+func (c *Client) saveConfig() error {
+	configPath := getConfigPath()
+	data, err := json.MarshalIndent(c.config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0644)
+}

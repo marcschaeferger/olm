@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/fosrl/newt/logger"
-	"github.com/fosrl/newt/websocket"
+	"github.com/fosrl/olm/websocket"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -356,7 +356,7 @@ func main() {
 	}
 
 	// Create a new olm
-	olm, err := websocket.NewOlm(
+	olm, err := websocket.NewClient(
 		id,     // CLI arg takes precedence
 		secret, // CLI arg takes precedence
 		endpoint,

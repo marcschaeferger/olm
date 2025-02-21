@@ -1,19 +1,13 @@
 # Olm
 
-Olm is a fully user space [WireGuard](https://www.wireguard.com/) tunnel olm and TCP/UDP proxy, designed to securely expose private resources controlled by Pangolin. By using Olm, you don't need to manage complex WireGuard tunnels and NATing.
+Olm is a [WireGuard](https://www.wireguard.com/) tunnel manager designed to securely connect to private resources. By using Olm, you don't need to manage complex WireGuard tunnels.
 
 ### Installation and Documentation
 
-Olm is used with Pangolin and Gerbil as part of the larger system. See documentation below:
+Olm is used with Pangolin and Newt as part of the larger system. See documentation below:
 
 -   [Installation Instructions](https://docs.fossorial.io)
 -   [Full Documentation](https://docs.fossorial.io)
-
-## Preview
-
-<img src="public/screenshots/preview.png" alt="Preview"/>
-
-_Sample output of a Olm container connected to Pangolin and hosting various resource target proxies._
 
 ## Key Functions
 
