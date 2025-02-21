@@ -404,15 +404,6 @@ func main() {
 			return
 		}
 
-		// logger.Info("Received: %+v", msg)
-		// tun, tnet, err = netstack.CreateNetTUN(
-		// 	[]netip.Addr{netip.MustParseAddr(wgData.TunnelIP)},
-		// 	[]netip.Addr{netip.MustParseAddr(dns)},
-		// 	mtuInt)
-		// if err != nil {
-		// 	logger.Error("Failed to create TUN device: %v", err)
-		// }
-
 		tdev, err := func() (tun.Device, error) {
 			tunFdStr := os.Getenv(ENV_WG_TUN_FD)
 			if tunFdStr == "" {
@@ -434,6 +425,11 @@ func main() {
 			file := os.NewFile(uintptr(fd), "")
 			return tun.CreateTUNFromFile(file, mtuInt)
 		}()
+
+		if err != nil {
+			logger.Error("Failed to create TUN device: %v", err)
+			return
+		}
 
 		// Create WireGuard device
 		dev = device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(
