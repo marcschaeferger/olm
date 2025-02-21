@@ -7,6 +7,7 @@ toolchain go1.23.2
 require golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
 
 require (
+	github.com/fosrl/newt v0.0.0-20250215225251-76503f3f2cd8 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect

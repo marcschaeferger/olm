@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fosrl/client/logger"
-	"github.com/fosrl/client/websocket"
+	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/newt/websocket"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
