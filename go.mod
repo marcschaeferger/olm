@@ -1,4 +1,4 @@
-module github.com/fosrl/newt
+module github.com/fosrl/client
 
 go 1.23.1
 

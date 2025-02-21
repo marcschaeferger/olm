@@ -1,10 +1,10 @@
 services:
-  newt:
-    image: fosrl/newt:latest
-    container_name: newt
+  client:
+    image: fosrl/client:latest
+    container_name: client
     restart: unless-stopped
     environment:
       - PANGOLIN_ENDPOINT=https://example.com
-      - NEWT_ID=2ix2t8xk22ubpfy 
-      - NEWT_SECRET=nnisrfsdfc7prqsp9ewo1dvtvci50j5uiqotez00dgap0ii2 
+      - CLIENT_ID=2ix2t8xk22ubpfy 
+      - CLIENT_SECRET=nnisrfsdfc7prqsp9ewo1dvtvci50j5uiqotez00dgap0ii2 
       - LOG_LEVEL=DEBUG

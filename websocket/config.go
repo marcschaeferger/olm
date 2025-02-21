@@ -12,11 +12,11 @@ func getConfigPath() string {
 	var configDir string
 	switch runtime.GOOS {
 	case "darwin":
-		configDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "newt-client")
+		configDir = filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "client-client")
 	case "windows":
-		configDir = filepath.Join(os.Getenv("APPDATA"), "newt-client")
+		configDir = filepath.Join(os.Getenv("APPDATA"), "client-client")
 	default: // linux and others
-		configDir = filepath.Join(os.Getenv("HOME"), ".config", "newt-client")
+		configDir = filepath.Join(os.Getenv("HOME"), ".config", "client-client")
 	}
 
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -27,7 +27,7 @@ func getConfigPath() string {
 }
 
 func (c *Client) loadConfig() error {
-	if c.config.NewtID != "" && c.config.Secret != "" && c.config.Endpoint != "" {
+	if c.config.ClientID != "" && c.config.Secret != "" && c.config.Endpoint != "" {
 		return nil
 	}
 
@@ -45,8 +45,8 @@ func (c *Client) loadConfig() error {
 		return err
 	}
 
-	if c.config.NewtID == "" {
-		c.config.NewtID = config.NewtID
+	if c.config.ClientID == "" {
+		c.config.ClientID = config.ClientID
 	}
 	if c.config.Token == "" {
 		c.config.Token = config.Token

@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fosrl/newt/logger"
-	"github.com/fosrl/newt/websocket"
+	"github.com/fosrl/client/logger"
+	"github.com/fosrl/client/websocket"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -291,10 +291,10 @@ func main() {
 		reachableAt          string
 	)
 
-	// if PANGOLIN_ENDPOINT, NEWT_ID, and NEWT_SECRET are set as environment variables, they will be used as default values
+	// if PANGOLIN_ENDPOINT, CLIENT_ID, and CLIENT_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
-	id = os.Getenv("NEWT_ID")
-	secret = os.Getenv("NEWT_SECRET")
+	id = os.Getenv("CLIENT_ID")
+	secret = os.Getenv("CLIENT_SECRET")
 	mtu = os.Getenv("MTU")
 	dns = os.Getenv("DNS")
 	logLevel = os.Getenv("LOG_LEVEL")
@@ -306,10 +306,10 @@ func main() {
 		flag.StringVar(&endpoint, "endpoint", "", "Endpoint of your pangolin server")
 	}
 	if id == "" {
-		flag.StringVar(&id, "id", "", "Newt ID")
+		flag.StringVar(&id, "id", "", "Client ID")
 	}
 	if secret == "" {
-		flag.StringVar(&secret, "secret", "", "Newt secret")
+		flag.StringVar(&secret, "secret", "", "Client secret")
 	}
 	if mtu == "" {
 		flag.StringVar(&mtu, "mtu", "1280", "MTU to use")
@@ -336,7 +336,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("Newt version replaceme")
+		fmt.Println("Client version replaceme")
 		os.Exit(0)
 	}
 

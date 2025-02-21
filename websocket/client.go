@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/client/logger"
 
 	"github.com/gorilla/websocket"
 )
@@ -45,10 +45,10 @@ func (c *Client) OnConnect(callback func() error) {
 	c.onConnect = callback
 }
 
-// NewClient creates a new Newt client
-func NewClient(newtID, secret string, endpoint string, opts ...ClientOption) (*Client, error) {
+// NewClient creates a new Client client
+func NewClient(clientID, secret string, endpoint string, opts ...ClientOption) (*Client, error) {
 	config := &Config{
-		NewtID:   newtID,
+		ClientID: clientID,
 		Secret:   secret,
 		Endpoint: endpoint,
 	}
@@ -152,9 +152,9 @@ func (c *Client) getToken() (string, error) {
 	// If we already have a token, try to use it
 	if c.config.Token != "" {
 		tokenCheckData := map[string]interface{}{
-			"newtId": c.config.NewtID,
-			"secret": c.config.Secret,
-			"token":  c.config.Token,
+			"clientId": c.config.ClientID,
+			"secret":   c.config.Secret,
+			"token":    c.config.Token,
 		}
 		jsonData, err := json.Marshal(tokenCheckData)
 		if err != nil {
@@ -164,7 +164,7 @@ func (c *Client) getToken() (string, error) {
 		// Create a new request
 		req, err := http.NewRequest(
 			"POST",
-			baseEndpoint+"/api/v1/auth/newt/get-token",
+			baseEndpoint+"/api/v1/auth/client/get-token",
 			bytes.NewBuffer(jsonData),
 		)
 		if err != nil {
@@ -196,8 +196,8 @@ func (c *Client) getToken() (string, error) {
 
 	// Get a new token
 	tokenData := map[string]interface{}{
-		"newtId": c.config.NewtID,
-		"secret": c.config.Secret,
+		"clientId": c.config.ClientID,
+		"secret":   c.config.Secret,
 	}
 	jsonData, err := json.Marshal(tokenData)
 	if err != nil {
@@ -207,7 +207,7 @@ func (c *Client) getToken() (string, error) {
 	// Create a new request
 	req, err := http.NewRequest(
 		"POST",
-		baseEndpoint+"/api/v1/auth/newt/get-token",
+		baseEndpoint+"/api/v1/auth/client/get-token",
 		bytes.NewBuffer(jsonData),
 	)
 	if err != nil {
