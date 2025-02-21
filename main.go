@@ -52,7 +52,7 @@ func fixKey(key string) string {
 	// Decode from base64
 	decoded, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
-		logger.Fatal("Error decoding base64:", err)
+		logger.Fatal("Error decoding base64")
 	}
 
 	// Convert to hex
@@ -448,7 +448,7 @@ func main() {
 public_key=%s
 allowed_ip=%s/32
 endpoint=%s
-persistent_keepalive_interval=5`, fixKey(fmt.Sprintf("%s", privateKey)), fixKey(wgData.PublicKey), wgData.ServerIP, endpoint)
+persistent_keepalive_interval=5`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, endpoint)
 
 		err = dev.IpcSet(config)
 		if err != nil {
@@ -482,7 +482,7 @@ persistent_keepalive_interval=5`, fixKey(fmt.Sprintf("%s", privateKey)), fixKey(
 		logger.Debug("Public key: %s", publicKey)
 
 		err := client.SendMessage("client/wg/register", map[string]interface{}{
-			"publicKey": fmt.Sprintf("%s", publicKey),
+			"publicKey": publicKey.String(),
 		})
 		if err != nil {
 			logger.Error("Failed to send registration message: %v", err)
