@@ -267,6 +267,60 @@ func configureLinux(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
 	return nil
 }
 
+func sendUDPHolePunch(serverAddr string, olmID string, sourcePort int) error {
+	// Bind to specific local port
+	localAddr := &net.UDPAddr{
+		Port: sourcePort,
+		IP:   net.IPv4zero,
+	}
+
+	remoteAddr, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		return fmt.Errorf("failed to resolve UDP address: %v", err)
+	}
+
+	conn, err := net.ListenUDP("udp", localAddr)
+	if err != nil {
+		return fmt.Errorf("failed to bind UDP socket: %v", err)
+	}
+	defer conn.Close()
+
+	payload := struct {
+		OlmID string `json:"olmId"`
+	}{
+		OlmID: olmID,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %v", err)
+	}
+
+	_, err = conn.WriteToUDP(data, remoteAddr)
+	if err != nil {
+		return fmt.Errorf("failed to send UDP packet: %v", err)
+	}
+
+	return nil
+}
+
+type fixedPortBind struct {
+	port uint16
+	conn.Bind
+}
+
+func (b *fixedPortBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
+	// Ignore the requested port and use our fixed port
+	return b.Bind.Open(b.port)
+}
+
+func NewFixedPortBind(port uint16) conn.Bind {
+	return &fixedPortBind{
+		port: port,
+		Bind: conn.NewDefaultBind(),
+	}
+}
+
 func main() {
 	var (
 		endpoint             string
@@ -282,6 +336,8 @@ func main() {
 		generateAndSaveKeyTo string
 		reachableAt          string
 	)
+
+	const sourcePort = 21821
 
 	// if PANGOLIN_ENDPOINT, OLM_ID, and OLM_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
@@ -438,8 +494,7 @@ func main() {
 			return
 		}
 
-		// Create WireGuard device
-		dev = device.NewDevice(tdev, conn.NewDefaultBind(), device.NewLogger(
+		dev = device.NewDevice(tdev, NewFixedPortBind(uint16(sourcePort)), device.NewLogger(
 			mapToWireGuardLogLevel(loggerLevel),
 			"wireguard: ",
 		))
@@ -513,6 +568,11 @@ persistent_keepalive_interval=5`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		logger.Info("Sent registration message")
 		return nil
 	})
+
+	// Send holepunch from specific port
+	if err := sendUDPHolePunch(endpoint+":21820", id, sourcePort); err != nil {
+		logger.Error("Failed to send UDP hole punch: %v", err)
+	}
 
 	// Connect to the WebSocket server
 	if err := olm.Connect(); err != nil {
