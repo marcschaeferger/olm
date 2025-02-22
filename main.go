@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
-	"unsafe"
 
 	"github.com/fosrl/newt/logger"
 	"github.com/fosrl/olm/websocket"
@@ -146,7 +147,10 @@ func resolveDomain(domain string) (string, error) {
 }
 
 // ConfigureInterface configures a network interface with an IP address and brings it up
-func ConfigureInterface(interfaceName string, ipAddr string) error {
+func ConfigureInterface(interfaceName string, wgData WgData) error {
+	var ipAddr string = wgData.TunnelIP
+	var destIP string = wgData.ServerIP
+
 	// Parse the IP address and network
 	ip, ipNet, err := net.ParseCIDR(ipAddr)
 	if err != nil {
@@ -157,69 +161,53 @@ func ConfigureInterface(interfaceName string, ipAddr string) error {
 	case "linux":
 		return configureLinux(interfaceName, ip, ipNet)
 	case "darwin":
-		return configureDarwin(interfaceName, ip, ipNet)
+		return configureDarwin(interfaceName, ip, destIP)
 	default:
 		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
 }
 
-func configureDarwin(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
-	// Get interface by name
+func findUnusedUTUN() (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("failed to list interfaces: %v", err)
+	}
+	used := make(map[int]bool)
+	re := regexp.MustCompile(`^utun(\d+)$`)
+	for _, iface := range ifaces {
+		if matches := re.FindStringSubmatch(iface.Name); len(matches) == 2 {
+			if num, err := strconv.Atoi(matches[1]); err == nil {
+				used[num] = true
+			}
+		}
+	}
+	// Try utun0 up to utun255.
+	for i := 0; i < 256; i++ {
+		if !used[i] {
+			return fmt.Sprintf("utun%d", i), nil
+		}
+	}
+	return "", fmt.Errorf("no unused utun interface found")
+}
+
+func configureDarwin(interfaceName string, ip net.IP, destIp string) error {
+	logger.Info("Configuring darwin interface: %s", interfaceName)
+
 	iface, err := net.InterfaceByName(interfaceName)
 	if err != nil {
 		return fmt.Errorf("failed to get interface %s: %v", interfaceName, err)
 	}
-
-	// print something using the iface
 	logger.Info("Interface %s: %v", interfaceName, iface)
 
-	// Create socket
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_DGRAM, 0)
+	ipStr := ip.String()
+
+	cmd := exec.Command("ifconfig", interfaceName, ipStr+"/24", destIp, "up")
+	// print the command used
+	logger.Info("Running command: %v", cmd)
+
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to create socket: %v", err)
-	}
-	defer syscall.Close(fd)
-
-	// Prepare interface request structure
-	ifr := struct {
-		Name  [16]byte
-		Flags uint16
-	}{}
-	copy(ifr.Name[:], interfaceName)
-
-	// Get current flags
-	if err := ioctl(fd, syscall.SIOCGIFFLAGS, uintptr(unsafe.Pointer(&ifr))); err != nil {
-		return fmt.Errorf("failed to get interface flags: %v", err)
-	}
-
-	// Set interface up
-	ifr.Flags |= syscall.IFF_UP | syscall.IFF_RUNNING
-	if err := ioctl(fd, syscall.SIOCSIFFLAGS, uintptr(unsafe.Pointer(&ifr))); err != nil {
-		return fmt.Errorf("failed to set interface up: %v", err)
-	}
-
-	// Prepare address structure
-	var addr syscall.SockaddrInet4
-	copy(addr.Addr[:], ip.To4())
-
-	// Create interface address request
-	ifra := struct {
-		Name [16]byte
-		Addr syscall.RawSockaddrInet4
-		Mask syscall.RawSockaddrInet4
-	}{}
-	copy(ifra.Name[:], interfaceName)
-	copy(ifra.Addr.Addr[:], ip.To4())
-	copy(ifra.Mask.Addr[:], ipNet.Mask)
-
-	// Set IP address
-	if err := ioctl(fd, syscall.SIOCSIFADDR, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set interface address: %v", err)
-	}
-
-	// Set netmask
-	if err := ioctl(fd, syscall.SIOCSIFNETMASK, uintptr(unsafe.Pointer(&ifra))); err != nil {
-		return fmt.Errorf("failed to set interface netmask: %v", err)
+		return fmt.Errorf("ifconfig command failed: %v, output: %s", err, out)
 	}
 
 	return nil
@@ -352,7 +340,7 @@ func main() {
 	reachableAt = os.Getenv("REACHABLE_AT")
 
 	if endpoint == "" {
-		flag.StringVar(&endpoint, "endpoint", "", "Endpoint of your pangolin server")
+		flag.StringVar(&endpoint, "endpoint", "", "Endpoint of your Pangolin server")
 	}
 	if id == "" {
 		flag.StringVar(&id, "id", "", "Olm ID")
@@ -440,8 +428,19 @@ func main() {
 			return
 		}
 
+		// NEED TO DETERMINE AVAILABLE TUN DEVICE HERE
 		tdev, err := func() (tun.Device, error) {
 			tunFdStr := os.Getenv(ENV_WG_TUN_FD)
+
+			// if on macOS, call findUnusedUTUN to get a new utun device
+			if runtime.GOOS == "darwin" {
+				interfaceName, err := findUnusedUTUN()
+				if err != nil {
+					return nil, err
+				}
+				return tun.CreateTUN(interfaceName, mtuInt)
+			}
+
 			if tunFdStr == "" {
 				return tun.CreateTUN(interfaceName, mtuInt)
 			}
@@ -546,7 +545,7 @@ persistent_keepalive_interval=5`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		}
 
 		// configure the interface
-		err = ConfigureInterface(realInterfaceName, wgData.TunnelIP)
+		err = ConfigureInterface(realInterfaceName, wgData)
 		if err != nil {
 			logger.Error("Failed to configure interface: %v", err)
 		}
