@@ -21,6 +21,7 @@ import (
 	"github.com/fosrl/olm/websocket"
 	"github.com/vishvananda/netlink"
 
+	"golang.org/x/exp/rand"
 	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -360,23 +361,31 @@ func FindAvailableUDPPort(minPort, maxPort uint16) (uint16, error) {
 		return 0, fmt.Errorf("invalid port range: min=%d, max=%d", minPort, maxPort)
 	}
 
-	for port := minPort; port <= maxPort; port++ {
-		// Create the UDP address to test
+	// Create a slice of all ports in the range
+	portRange := make([]uint16, maxPort-minPort+1)
+	for i := range portRange {
+		portRange[i] = minPort + uint16(i)
+	}
+
+	// Fisher-Yates shuffle to randomize the port order
+	rand.Seed(uint64(time.Now().UnixNano()))
+	for i := len(portRange) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		portRange[i], portRange[j] = portRange[j], portRange[i]
+	}
+
+	// Try each port in the randomized order
+	for _, port := range portRange {
 		addr := &net.UDPAddr{
 			IP:   net.ParseIP("127.0.0.1"),
 			Port: int(port),
 		}
-
-		// Attempt to create a UDP listener
 		conn, err := net.ListenUDP("udp", addr)
 		if err != nil {
 			continue // Port is in use or there was an error, try next port
 		}
-
-		// Close the connection immediately
 		_ = conn.SetDeadline(time.Now())
 		conn.Close()
-
 		return port, nil
 	}
 
