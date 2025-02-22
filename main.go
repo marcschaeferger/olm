@@ -267,6 +267,7 @@ func configureLinux(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
 	return nil
 }
 
+// TODO: we need to send the token with this probably to verify auth
 func sendUDPHolePunch(serverAddr string, olmID string, sourcePort int) error {
 	// Bind to specific local port
 	localAddr := &net.UDPAddr{
