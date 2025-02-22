@@ -65,56 +65,6 @@ const (
 	ENV_WG_PROCESS_FOREGROUND = "WG_PROCESS_FOREGROUND"
 )
 
-// func startPingCheck(serverIP string, stopChan chan struct{}) {
-// 	ticker := time.NewTicker(10 * time.Second)
-// 	defer ticker.Stop()
-
-// 	go func() {
-// 		for {
-// 			select {
-// 			case <-ticker.C:
-// 				err := ping(serverIP)
-// 				if err != nil {
-// 					logger.Warn("Periodic ping failed: %v", err)
-// 					logger.Warn("HINT: Check if the WireGuard tunnel is up and the server is reachable")
-// 				}
-// 			case <-stopChan:
-// 				logger.Info("Stopping ping check")
-// 				return
-// 			}
-// 		}
-// 	}()
-// }
-
-// func pingWithRetry(dst string) error {
-// 	const (
-// 		maxAttempts = 5
-// 		retryDelay  = 2 * time.Second
-// 	)
-
-// 	var lastErr error
-// 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-// 		logger.Info("Ping attempt %d of %d", attempt, maxAttempts)
-
-// 		if err := ping(dst); err != nil {
-// 			lastErr = err
-// 			logger.Warn("Ping attempt %d failed: %v", attempt, err)
-
-// 			if attempt < maxAttempts {
-// 				time.Sleep(retryDelay)
-// 				continue
-// 			}
-// 			return fmt.Errorf("all ping attempts failed after %d tries, last error: %w",
-// 				maxAttempts, lastErr)
-// 		}
-
-// 		// Successful ping
-// 		return nil
-// 	}
-
-// 	return fmt.Errorf("unexpected error: all ping attempts failed")
-// }
-
 func parseLogLevel(level string) logger.LogLevel {
 	switch strings.ToUpper(level) {
 	case "DEBUG":
@@ -418,24 +368,8 @@ func main() {
 		olm.Close()
 	})
 
-	pingStopChan := make(chan struct{})
-	defer close(pingStopChan)
-
 	// Register handlers for different message types
 	olm.RegisterHandler("olm/wg/connect", func(msg websocket.WSMessage) {
-		logger.Info("Received registration message")
-
-		// if connected {
-		// logger.Info("Already connected! But I will send a ping anyway...")
-		// err := pingWithRetry(wgData.ServerIP)
-		// 	if err != nil {
-		// 		// Handle complete failure after all retries
-		// 		logger.Warn("Failed to ping %s: %v", wgData.ServerIP, err)
-		// 		logger.Warn("HINT: Do you have UDP port 51280 (or the port in config.yml) open on your Pangolin server?")
-		// 	}
-		// 	return
-		// }
-
 		logger.Info("Received message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
@@ -562,19 +496,6 @@ persistent_keepalive_interval=5`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		}
 
 		logger.Info("WireGuard device created.")
-		// Ping to bring the tunnel up on the server side quickly
-		// ping(tnet, wgData.ServerIP)
-		// err = pingWithRetry(wgData.ServerIP)
-		// if err != nil {
-		// 	// Handle complete failure after all retries
-		// 	logger.Error("Failed to ping %s: %v", wgData.ServerIP, err)
-		// }
-
-		// if !connected {
-		// 	logger.Info("Starting ping check")
-		// 	startPingCheck(wgData.ServerIP, pingStopChan)
-		// }
-		// connected = true
 	})
 
 	olm.OnConnect(func() error {
