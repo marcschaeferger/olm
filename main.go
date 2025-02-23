@@ -123,19 +123,15 @@ func mapToWireGuardLogLevel(level logger.LogLevel) int {
 }
 
 func resolveDomain(domain string) (string, error) {
-	// Check if there's a port in the domain
+	// First handle any protocol prefix
+	domain = strings.TrimPrefix(strings.TrimPrefix(domain, "https://"), "http://")
+
+	// Now split host and port
 	host, port, err := net.SplitHostPort(domain)
 	if err != nil {
 		// No port found, use the domain as is
 		host = domain
 		port = ""
-	}
-
-	// Remove any protocol prefix if present
-	if strings.HasPrefix(host, "http://") {
-		host = strings.TrimPrefix(host, "http://")
-	} else if strings.HasPrefix(host, "https://") {
-		host = strings.TrimPrefix(host, "https://")
 	}
 
 	// Lookup IP addresses
@@ -304,14 +300,18 @@ func sendUDPHolePunch(serverAddr string, olmID string, sourcePort uint16) error 
 }
 
 func keepSendingUDPHolePunch(endpoint string, olmID string, sourcePort uint16) {
-	var host = endpoint
-	if strings.HasPrefix(host, "http://") {
-		host = strings.TrimPrefix(host, "http://")
-	} else if strings.HasPrefix(host, "https://") {
-		host = strings.TrimPrefix(host, "https://")
+	host, err := resolveDomain(endpoint)
+	if err != nil {
+		logger.Error("Failed to resolve endpoint: %v", err)
+		return
 	}
 
-	ticker := time.NewTicker(1 * time.Second)
+	// Execute once immediately before starting the loop
+	if err := sendUDPHolePunch(host+":21820", olmID, sourcePort); err != nil {
+		logger.Error("Failed to send UDP hole punch: %v", err)
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -340,7 +340,7 @@ func sendRegistration(olm *websocket.Client, publicKey string) error {
 }
 
 func keepSendingRegistration(olm *websocket.Client, publicKey string) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -610,18 +610,24 @@ func main() {
 
 		logger.Info("UAPI listener started")
 
-		endpoint, err := resolveDomain(wgData.Endpoint)
-		if err != nil {
-			logger.Error("Failed to resolve endpoint: %v", err)
-			return
-		}
+		// endpoint, err := resolveDomain(wgData.Endpoint)
+		// if err != nil {
+		// 	logger.Error("Failed to resolve endpoint: %v", err)
+		// 	return
+		// }
 
 		// Configure WireGuard
+		// 		config := fmt.Sprintf(`private_key=%s
+		// public_key=%s
+		// allowed_ip=%s/32
+		// endpoint=%s
+		// persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, endpoint)
+
 		config := fmt.Sprintf(`private_key=%s
 public_key=%s
 allowed_ip=%s/32
-endpoint=%s
-persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, endpoint)
+endpoint=18.212.58.121:21820
+persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP)
 
 		err = dev.IpcSet(config)
 		if err != nil {
