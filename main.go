@@ -126,6 +126,9 @@ func resolveDomain(domain string) (string, error) {
 	// First handle any protocol prefix
 	domain = strings.TrimPrefix(strings.TrimPrefix(domain, "https://"), "http://")
 
+	// if there are any trailing slashes, remove them
+	domain = strings.TrimSuffix(domain, "/")
+
 	// Now split host and port
 	host, port, err := net.SplitHostPort(domain)
 	if err != nil {
