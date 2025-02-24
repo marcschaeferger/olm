@@ -19,6 +19,8 @@ import (
 
 	"github.com/fosrl/newt/logger"
 	"github.com/fosrl/olm/websocket"
+	"github.com/go-ole/go-ole"
+	"github.com/scjalliance/comshim"
 	"github.com/vishvananda/netlink"
 
 	"golang.org/x/exp/rand"
@@ -182,8 +184,152 @@ func ConfigureInterface(interfaceName string, wgData WgData) error {
 		return configureLinux(interfaceName, ip, ipNet)
 	case "darwin":
 		return configureDarwin(interfaceName, ip, destIP)
+	case "windows":
+		return configureWindows(interfaceName, ip, ipNet, destIP)
 	default:
 		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+}
+
+// configureWindows sets up the network interface on Windows
+func configureWindows(interfaceName string, ip net.IP, ipNet *net.IPNet, destIP string) error {
+	logger.Info("Configuring Windows interface: %s", interfaceName)
+
+	// Initialize COM for Windows API calls
+	comshim.Add(1)
+	defer comshim.Done()
+
+	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
+		return fmt.Errorf("failed to initialize COM: %v", err)
+	}
+	defer ole.CoUninitialize()
+
+	// Execute netsh command to set the IP address
+	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address",
+		fmt.Sprintf("name=%s", interfaceName), "static", ip.String(),
+		fmt.Sprintf("%d", maskBits(ipNet.Mask)))
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("netsh command failed: %v, output: %s", err, out)
+	}
+
+	// Add a route to the destination IP if needed
+	cmd = exec.Command("netsh", "interface", "ipv4", "add", "route",
+		fmt.Sprintf("%s/32", destIP), interfaceName, ip.String())
+
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		logger.Warn("Failed to add route, but continuing: %v, output: %s", err, out)
+	}
+
+	return nil
+}
+
+// Helper function to count mask bits
+func maskBits(mask net.IPMask) int {
+	bits, _ := mask.Size()
+	return bits
+}
+
+func findAvailableWindowsInterface() (string, error) {
+	// On Windows, WireGuard typically uses names like "WireGuard1", "WireGuard2", etc.
+	// Or you can use a GUID-based name
+
+	// Check existing interfaces to avoid conflicts
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("failed to list interfaces: %v", err)
+	}
+
+	// Find an unused name
+	for i := 1; i <= 10; i++ {
+		name := fmt.Sprintf("WireGuard%d", i)
+		exists := false
+
+		for _, iface := range ifaces {
+			if iface.Name == name {
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			return name, nil
+		}
+	}
+
+	// If no standard name is available, use a random name
+	return fmt.Sprintf("WireGuard-%x", rand.Uint32()), nil
+}
+
+// Device creation function that handles Windows-specific TUN creation
+func createTUNDevice(interfaceName string, mtuInt int) (tun.Device, error) {
+	switch runtime.GOOS {
+	case "windows":
+		interfaceName, err := findAvailableWindowsInterface()
+		if err != nil {
+			return nil, err
+		}
+		return createWindowsTUN(interfaceName, mtuInt)
+	case "darwin":
+		interfaceName, err := findUnusedUTUN()
+		if err != nil {
+			return nil, err
+		}
+		return tun.CreateTUN(interfaceName, mtuInt)
+	default:
+		tunFdStr := os.Getenv(ENV_WG_TUN_FD)
+		if tunFdStr == "" {
+			return tun.CreateTUN(interfaceName, mtuInt)
+		}
+
+		// construct tun device from supplied fd
+		fd, err := strconv.ParseUint(tunFdStr, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+
+		// Only set nonblock on non-Windows platforms
+		if runtime.GOOS != "windows" {
+			err = unix.SetNonblock(int(fd), true)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		file := os.NewFile(uintptr(fd), "")
+		// For Windows builds, provide an alternative to CreateTUNFromFile
+		if runtime.GOOS == "windows" {
+			return tun.CreateTUN(interfaceName, mtuInt)
+		}
+		return tun.CreateTUNFromFile(file, mtuInt)
+	}
+}
+
+// Windows-specific TUN device creation
+func createWindowsTUN(interfaceName string, mtuInt int) (tun.Device, error) {
+	// On Windows, we use the WinTUN driver or the built-in WireGuard TUN implementation
+	return tun.CreateTUN(interfaceName, mtuInt)
+}
+
+// Replace the Unix-specific UAPI functions with Windows-compatible ones
+func openUAPIFile(interfaceName string) (*os.File, error) {
+	if runtime.GOOS == "windows" {
+		// Windows uses a different approach for the UAPI socket - named pipes
+		return ipc.UAPIOpen(interfaceName)
+	} else {
+		uapiFdStr := os.Getenv(ENV_WG_UAPI_FD)
+		if uapiFdStr == "" {
+			return ipc.UAPIOpen(interfaceName)
+		}
+
+		// use supplied fd
+		fd, err := strconv.ParseUint(uapiFdStr, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		return os.NewFile(uintptr(fd), ""), nil
 	}
 }
 
@@ -473,6 +619,17 @@ func parseStatistics(info string) statistics {
 	return stats
 }
 
+func init() {
+	if runtime.GOOS == "windows" {
+		// Initialize COM for Windows API calls if needed at startup
+		comshim.Add(1)
+		if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
+			// Handle initialization error
+			fmt.Printf("Failed to initialize COM: %v\n", err)
+		}
+	}
+}
+
 func main() {
 	var (
 		endpoint      string
@@ -627,38 +784,11 @@ func main() {
 			return
 		}
 
-		// NEED TO DETERMINE AVAILABLE TUN DEVICE HERE
-		tdev, err = func() (tun.Device, error) {
-			tunFdStr := os.Getenv(ENV_WG_TUN_FD)
-
-			// if on macOS, call findUnusedUTUN to get a new utun device
-			if runtime.GOOS == "darwin" {
-				interfaceName, err := findUnusedUTUN()
-				if err != nil {
-					return nil, err
-				}
-				return tun.CreateTUN(interfaceName, mtuInt)
-			}
-
-			if tunFdStr == "" {
-				return tun.CreateTUN(interfaceName, mtuInt)
-			}
-
-			// construct tun device from supplied fd
-
-			fd, err := strconv.ParseUint(tunFdStr, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-
-			err = unix.SetNonblock(int(fd), true)
-			if err != nil {
-				return nil, err
-			}
-
-			file := os.NewFile(uintptr(fd), "")
-			return tun.CreateTUNFromFile(file, mtuInt)
-		}()
+		tdev, err = createTUNDevice(interfaceName, mtuInt)
+		if err != nil {
+			logger.Error("Failed to create TUN device: %v", err)
+			return
+		}
 
 		if err != nil {
 			logger.Error("Failed to create TUN device: %v", err)
@@ -672,21 +802,7 @@ func main() {
 
 		// open UAPI file (or use supplied fd)
 
-		fileUAPI, err := func() (*os.File, error) {
-			uapiFdStr := os.Getenv(ENV_WG_UAPI_FD)
-			if uapiFdStr == "" {
-				return ipc.UAPIOpen(interfaceName)
-			}
-
-			// use supplied fd
-
-			fd, err := strconv.ParseUint(uapiFdStr, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-
-			return os.NewFile(uintptr(fd), ""), nil
-		}()
+		fileUAPI, err := openUAPIFile(interfaceName)
 		if err != nil {
 			logger.Error("UAPI listen error: %v", err)
 			os.Exit(1)
@@ -798,7 +914,13 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 
 	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	if runtime.GOOS == "windows" {
+		// Windows supports different signals
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	} else {
+		// Unix signals
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	}
 	<-sigCh
 
 	select {

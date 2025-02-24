@@ -13,7 +13,9 @@ require (
 )
 
 require (
+	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/scjalliance/comshim v0.0.0-20250111221056-b2ef9d8d7e0f // indirect
 	github.com/vishvananda/netlink v1.3.0 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	golang.org/x/crypto v0.31.0 // indirect
