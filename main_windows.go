@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build windows
 
 package main
 
@@ -10,20 +10,16 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
 	"runtime"
 	"strconv"
 	"syscall"
 
 	"github.com/fosrl/newt/logger"
 	"github.com/fosrl/olm/websocket"
-	"github.com/vishvananda/netlink"
-
-	"golang.org/x/sys/unix"
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/ipc"
 	"golang.zx2c4.com/wireguard/tun"
-
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -32,91 +28,52 @@ func ConfigureInterface(interfaceName string, wgData WgData) error {
 	var ipAddr string = wgData.TunnelIP
 	var destIP string = wgData.ServerIP
 
+	if runtime.GOOS == "windows" {
+		return configureWindows(interfaceName, ipAddr, destIP)
+	}
+
+	return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+}
+
+func configureWindows(interfaceName string, ipAddr, destIP string) error {
+	logger.Info("Configuring Windows interface: %s", interfaceName)
+
 	// Parse the IP address and network
 	ip, ipNet, err := net.ParseCIDR(ipAddr)
 	if err != nil {
 		return fmt.Errorf("invalid IP address: %v", err)
 	}
 
-	switch runtime.GOOS {
-	case "linux":
-		return configureLinux(interfaceName, ip, ipNet)
-	case "darwin":
-		return configureDarwin(interfaceName, ip, destIP)
-	default:
-		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
-	}
-}
+	// Set the IP address using netsh
+	// Windows uses the 'netsh' command to configure network interfaces
+	maskBits, _ := ipNet.Mask.Size()
 
-func findUnusedUTUN() (string, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("failed to list interfaces: %v", err)
-	}
-	used := make(map[int]bool)
-	re := regexp.MustCompile(`^utun(\d+)$`)
-	for _, iface := range ifaces {
-		if matches := re.FindStringSubmatch(iface.Name); len(matches) == 2 {
-			if num, err := strconv.Atoi(matches[1]); err == nil {
-				used[num] = true
-			}
-		}
-	}
-	// Try utun0 up to utun255.
-	for i := 0; i < 256; i++ {
-		if !used[i] {
-			return fmt.Sprintf("utun%d", i), nil
-		}
-	}
-	return "", fmt.Errorf("no unused utun interface found")
-}
+	// create a mask string like 255.255.255.0 from the maskBits
+	mask := net.CIDRMask(maskBits, 32)
+	maskIP := net.IP(mask)
 
-func configureDarwin(interfaceName string, ip net.IP, destIp string) error {
-	logger.Info("Configuring darwin interface: %s", interfaceName)
+	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address",
+		fmt.Sprintf("name=%s", interfaceName),
+		"source=static",
+		fmt.Sprintf("addr=%s", ip.String()),
+		fmt.Sprintf("mask=%s", maskIP.String()))
 
-	iface, err := net.InterfaceByName(interfaceName)
-	if err != nil {
-		return fmt.Errorf("failed to get interface %s: %v", interfaceName, err)
-	}
-	logger.Info("Interface %s: %v", interfaceName, iface)
-
-	ipStr := ip.String()
-
-	cmd := exec.Command("ifconfig", interfaceName, ipStr+"/24", destIp, "up") // TODO: dont hard code /24
-	// print the command used
 	logger.Info("Running command: %v", cmd)
-
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("ifconfig command failed: %v, output: %s", err, out)
+		return fmt.Errorf("netsh command failed: %v, output: %s", err, out)
 	}
 
-	return nil
-}
+	// Add a route to the destination IP
+	cmd = exec.Command("netsh", "interface", "ipv4", "add", "route",
+		fmt.Sprintf("%s/32", destIP),
+		fmt.Sprintf("interface=%s", interfaceName),
+		"metric=1")
 
-func configureLinux(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
-	// Get the interface
-	link, err := netlink.LinkByName(interfaceName)
+	logger.Info("Running command: %v", cmd)
+	out, err = cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to get interface %s: %v", interfaceName, err)
-	}
-
-	// Create the IP address attributes
-	addr := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   ip,
-			Mask: ipNet.Mask,
-		},
-	}
-
-	// Add the IP address to the interface
-	if err := netlink.AddrAdd(link, addr); err != nil {
-		return fmt.Errorf("failed to add IP address: %v", err)
-	}
-
-	// Bring up the interface
-	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("failed to bring up interface: %v", err)
+		return fmt.Errorf("netsh route command failed: %v, output: %s", err, out)
 	}
 
 	return nil
@@ -138,6 +95,12 @@ func main() {
 
 	stopHolepunch = make(chan struct{})
 	stopRegister = make(chan struct{})
+
+	// Check OS
+	if runtime.GOOS != "windows" {
+		fmt.Println("This version of olm is only for Windows systems")
+		os.Exit(1)
+	}
 
 	// if PANGOLIN_ENDPOINT, OLM_ID, and OLM_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
@@ -172,11 +135,10 @@ func main() {
 
 	// do a --version check
 	version := flag.Bool("version", false, "Print the version")
-
 	flag.Parse()
 
 	if *version {
-		fmt.Println("Olm version replaceme")
+		fmt.Println("Olm Windows version replaceme")
 		os.Exit(0)
 	}
 
@@ -214,7 +176,7 @@ func main() {
 	// Create TUN device and network stack
 	var dev *device.Device
 	var wgData WgData
-	var uapi *os.File
+	var uapi net.Listener
 	var tdev tun.Device
 
 	olm.RegisterHandler("olm/terminate", func(msg websocket.WSMessage) {
@@ -228,25 +190,21 @@ func main() {
 			logger.Info("Error marshaling data: %v", err)
 			return
 		}
-
 		if err := json.Unmarshal(jsonData, &wgData); err != nil {
 			logger.Info("Error unmarshaling target data: %v", err)
 			return
 		}
-
 		endpoint, err := resolveDomain(wgData.Endpoint)
 		if err != nil {
 			logger.Error("Failed to resolve endpoint: %v", err)
 			return
 		}
-
 		// Configure WireGuard
 		config := fmt.Sprintf(`private_key=%s
 		public_key=%s
 		allowed_ip=%s/32
 		endpoint=%s
 		persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, endpoint)
-
 		err = dev.IpcSet(config)
 		if err != nil {
 			logger.Error("Failed to configure WireGuard device: %v", err)
@@ -256,59 +214,24 @@ func main() {
 	// Register handlers for different message types
 	olm.RegisterHandler("olm/wg/connect", func(msg websocket.WSMessage) {
 		logger.Info("Received message: %v", msg.Data)
-
 		close(stopRegister)
-
 		// if there is an existing tunnel then close it
 		if dev != nil {
 			logger.Info("Got new message. Closing existing tunnel!")
 			dev.Close()
 		}
-
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
 			logger.Info("Error marshaling data: %v", err)
 			return
 		}
-
 		if err := json.Unmarshal(jsonData, &wgData); err != nil {
 			logger.Info("Error unmarshaling target data: %v", err)
 			return
 		}
 
-		// NEED TO DETERMINE AVAILABLE TUN DEVICE HERE
-		tdev, err = func() (tun.Device, error) {
-			tunFdStr := os.Getenv(ENV_WG_TUN_FD)
-
-			// if on macOS, call findUnusedUTUN to get a new utun device
-			if runtime.GOOS == "darwin" {
-				interfaceName, err := findUnusedUTUN()
-				if err != nil {
-					return nil, err
-				}
-				return tun.CreateTUN(interfaceName, mtuInt)
-			}
-
-			if tunFdStr == "" {
-				return tun.CreateTUN(interfaceName, mtuInt)
-			}
-
-			// construct tun device from supplied fd
-
-			fd, err := strconv.ParseUint(tunFdStr, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-
-			err = unix.SetNonblock(int(fd), true)
-			if err != nil {
-				return nil, err
-			}
-
-			file := os.NewFile(uintptr(fd), "")
-			return tun.CreateTUNFromFile(file, mtuInt)
-		}()
-
+		// Windows-specific TUN device creation
+		tdev, err = tun.CreateTUN(interfaceName, mtuInt)
 		if err != nil {
 			logger.Error("Failed to create TUN device: %v", err)
 			return
@@ -319,42 +242,20 @@ func main() {
 			interfaceName = realInterfaceName
 		}
 
-		// open UAPI file (or use supplied fd)
-
-		fileUAPI, err := func() (*os.File, error) {
-			uapiFdStr := os.Getenv(ENV_WG_UAPI_FD)
-			if uapiFdStr == "" {
-				return ipc.UAPIOpen(interfaceName)
-			}
-
-			// use supplied fd
-
-			fd, err := strconv.ParseUint(uapiFdStr, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-
-			return os.NewFile(uintptr(fd), ""), nil
-		}()
-		if err != nil {
-			logger.Error("UAPI listen error: %v", err)
-			os.Exit(1)
-			return
-		}
-
+		// Create the WireGuard device
 		dev = device.NewDevice(tdev, NewFixedPortBind(uint16(sourcePort)), device.NewLogger(
 			mapToWireGuardLogLevel(loggerLevel),
 			"wireguard: ",
 		))
 
-		errs := make(chan error)
-
-		uapi, err := ipc.UAPIListen(interfaceName, fileUAPI)
+		// Setup UAPI for Windows
+		uapi, err = ipc.UAPIListen(interfaceName)
 		if err != nil {
 			logger.Error("Failed to listen on uapi socket: %v", err)
 			os.Exit(1)
 		}
 
+		errs := make(chan error)
 		go func() {
 			for {
 				conn, err := uapi.Accept()
@@ -365,7 +266,6 @@ func main() {
 				go dev.IpcHandle(conn)
 			}
 		}()
-
 		logger.Info("UAPI listener started")
 
 		host, err := resolveDomain(wgData.Endpoint)
@@ -380,7 +280,6 @@ public_key=%s
 allowed_ip=%s/32
 endpoint=%s
 persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, host)
-
 		err = dev.IpcSet(config)
 		if err != nil {
 			logger.Error("Failed to configure WireGuard device: %v", err)
@@ -392,14 +291,13 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 			logger.Error("Failed to bring up WireGuard device: %v", err)
 		}
 
-		// configure the interface
+		// Configure the interface
 		err = ConfigureInterface(realInterfaceName, wgData)
 		if err != nil {
 			logger.Error("Failed to configure interface: %v", err)
 		}
 
 		close(stopHolepunch)
-
 		// Monitor the connection for activity
 		monitorConnection(dev, func() {
 			host, err := resolveDomain(endpoint)
@@ -407,31 +305,25 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 				logger.Error("Failed to resolve endpoint: %v", err)
 				return
 			}
-
 			// Configure WireGuard
 			config := fmt.Sprintf(`private_key=%s
 public_key=%s
 allowed_ip=%s/32
 endpoint=%s:21820
 persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, host)
-
 			err = dev.IpcSet(config)
 			if err != nil {
 				logger.Error("Failed to configure WireGuard device: %v", err)
 			}
-
 			logger.Info("Adjusted to point to relay!")
 		})
-
 		logger.Info("WireGuard device created.")
 	})
 
 	olm.OnConnect(func() error {
 		publicKey := privateKey.PublicKey()
 		logger.Debug("Public key: %s", publicKey)
-
 		go keepSendingRegistration(olm, publicKey.String())
-
 		logger.Info("Sent registration message")
 		return nil
 	})
@@ -447,7 +339,7 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 
 	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, windows.SIGTERM)
 	<-sigCh
 
 	select {
@@ -464,6 +356,11 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		close(stopRegister)
 	}
 
-	uapi.Close()
-	dev.Close()
+	if uapi != nil {
+		uapi.Close()
+	}
+
+	if dev != nil {
+		dev.Close()
+	}
 }
