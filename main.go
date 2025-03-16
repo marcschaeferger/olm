@@ -214,6 +214,7 @@ func main() {
 	// Create TUN device and network stack
 	var dev *device.Device
 	var wgData WgData
+	var holePunchData HolePunchData
 	var uapi *os.File
 	var tdev tun.Device
 
@@ -426,6 +427,23 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		logger.Info("WireGuard device created.")
 	})
 
+	olm.RegisterHandler("olm/wg/holepunch", func(msg websocket.WSMessage) {
+		logger.Info("Received message: %v", msg.Data)
+
+		jsonData, err := json.Marshal(msg.Data)
+		if err != nil {
+			logger.Info("Error marshaling data: %v", err)
+			return
+		}
+
+		if err := json.Unmarshal(jsonData, &holePunchData); err != nil {
+			logger.Info("Error unmarshaling target data: %v", err)
+			return
+		}
+
+		gerbilServerPubKey = holePunchData.ServerPubKey
+	})
+
 	olm.OnConnect(func() error {
 		publicKey := privateKey.PublicKey()
 		logger.Debug("Public key: %s", publicKey)
@@ -436,14 +454,17 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		return nil
 	})
 
-	// start sending UDP hole punch
-	go keepSendingUDPHolePunch(endpoint, id, sourcePort)
+	olm.OnTokenUpdate(func(token string) {
+		olmToken = token
+	})
 
 	// Connect to the WebSocket server
 	if err := olm.Connect(); err != nil {
 		logger.Fatal("Failed to connect to server: %v", err)
 	}
 	defer olm.Close()
+
+	go keepSendingUDPHolePunch(endpoint, id, sourcePort)
 
 	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)

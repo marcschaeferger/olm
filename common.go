@@ -12,9 +12,12 @@ import (
 
 	"github.com/fosrl/newt/logger"
 	"github.com/fosrl/olm/websocket"
+	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/exp/rand"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 type WgData struct {
@@ -34,9 +37,25 @@ type TargetData struct {
 	Targets []string `json:"targets"`
 }
 
+type HolePunchMessage struct {
+	NewtID string `json:"newtId"`
+}
+
+type HolePunchData struct {
+	ServerPubKey string `json:"serverPubKey"`
+}
+
+type EncryptedHolePunchMessage struct {
+	EphemeralPublicKey string `json:"ephemeralPublicKey"`
+	Nonce              []byte `json:"nonce"`
+	Ciphertext         []byte `json:"ciphertext"`
+}
+
 var (
-	stopHolepunch chan struct{}
-	stopRegister  chan struct{}
+	stopHolepunch      chan struct{}
+	stopRegister       chan struct{}
+	olmToken           string
+	gerbilServerPubKey string
 )
 
 const (
@@ -155,8 +174,12 @@ func resolveDomain(domain string) (string, error) {
 	return ipAddr, nil
 }
 
-// TODO: we need to send the token with this probably to verify auth
 func sendUDPHolePunch(serverAddr string, olmID string, sourcePort uint16) error {
+
+	if gerbilServerPubKey == "" || olmToken == "" {
+		return nil
+	}
+
 	// Bind to specific local port
 	localAddr := &net.UDPAddr{
 		Port: int(sourcePort),
@@ -176,21 +199,88 @@ func sendUDPHolePunch(serverAddr string, olmID string, sourcePort uint16) error 
 
 	payload := struct {
 		OlmID string `json:"olmId"`
+		Token string `json:"token"`
 	}{
 		OlmID: olmID,
+		Token: olmToken,
 	}
 
-	data, err := json.Marshal(payload)
+	// Convert payload to JSON
+	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %v", err)
 	}
 
-	_, err = conn.WriteToUDP(data, remoteAddr)
+	// Encrypt the payload using the server's WireGuard public key
+	encryptedPayload, err := encryptPayload(payloadBytes, gerbilServerPubKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt payload: %v", err)
+	}
+
+	jsonData, err := json.Marshal(encryptedPayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal encrypted payload: %v", err)
+	}
+
+	_, err = conn.WriteToUDP(jsonData, remoteAddr)
 	if err != nil {
 		return fmt.Errorf("failed to send UDP packet: %v", err)
 	}
 
 	return nil
+}
+
+func encryptPayload(payload []byte, serverPublicKey string) (interface{}, error) {
+	// Generate an ephemeral keypair for this message
+	ephemeralPrivateKey, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate ephemeral private key: %v", err)
+	}
+	ephemeralPublicKey := ephemeralPrivateKey.PublicKey()
+
+	// Parse the server's public key
+	serverPubKey, err := wgtypes.ParseKey(serverPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse server public key: %v", err)
+	}
+
+	// Use X25519 for key exchange (replacing deprecated ScalarMult)
+	var ephPrivKeyFixed [32]byte
+	copy(ephPrivKeyFixed[:], ephemeralPrivateKey[:])
+
+	// Perform X25519 key exchange
+	sharedSecret, err := curve25519.X25519(ephPrivKeyFixed[:], serverPubKey[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform X25519 key exchange: %v", err)
+	}
+
+	// Create an AEAD cipher using the shared secret
+	aead, err := chacha20poly1305.New(sharedSecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AEAD cipher: %v", err)
+	}
+
+	// Generate a random nonce
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %v", err)
+	}
+
+	// Encrypt the payload
+	ciphertext := aead.Seal(nil, nonce, payload, nil)
+
+	// Prepare the final encrypted message
+	encryptedMsg := struct {
+		EphemeralPublicKey string `json:"ephemeralPublicKey"`
+		Nonce              []byte `json:"nonce"`
+		Ciphertext         []byte `json:"ciphertext"`
+	}{
+		EphemeralPublicKey: ephemeralPublicKey.String(),
+		Nonce:              nonce,
+		Ciphertext:         ciphertext,
+	}
+
+	return encryptedMsg, nil
 }
 
 func keepSendingUDPHolePunch(endpoint string, olmID string, sourcePort uint16) {
