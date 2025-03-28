@@ -311,6 +311,18 @@ func keepSendingUDPHolePunch(endpoint string, olmID string, sourcePort uint16) {
 	}
 }
 
+func sendRelay(olm *websocket.Client) error {
+	err := olm.SendMessage("olm/wg/relay", map[string]interface{}{
+		"doIt": "now",
+	})
+	if err != nil {
+		logger.Error("Failed to send registration message: %v", err)
+		return err
+	}
+	logger.Info("Sent relay message")
+	return nil
+}
+
 func sendRegistration(olm *websocket.Client, publicKey string) error {
 	err := olm.SendMessage("olm/wg/register", map[string]interface{}{
 		"publicKey": publicKey,

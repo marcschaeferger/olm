@@ -254,9 +254,17 @@ func main() {
 		}
 	})
 
+	connectTimes := 0
 	// Register handlers for different message types
 	olm.RegisterHandler("olm/wg/connect", func(msg websocket.WSMessage) {
 		logger.Info("Received message: %v", msg.Data)
+
+		if connectTimes > 0 {
+			logger.Info("Already connected. Ignoring new connection request.")
+			return
+		}
+
+		connectTimes++
 
 		close(stopRegister)
 
@@ -422,6 +430,8 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 			}
 
 			logger.Info("Adjusted to point to relay!")
+
+			sendRelay(olm)
 		})
 
 		logger.Info("WireGuard device created.")
