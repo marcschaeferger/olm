@@ -21,11 +21,15 @@ import (
 )
 
 type WgData struct {
-	Endpoint  string        `json:"endpoint"`
-	PublicKey string        `json:"publicKey"`
-	ServerIP  string        `json:"serverIP"`
-	TunnelIP  string        `json:"tunnelIP"`
-	Targets   TargetsByType `json:"targets"`
+	Sites    []SiteConfig `json:"sites"`
+	TunnelIP string       `json:"tunnelIP"`
+}
+
+type SiteConfig struct {
+	SiteId    string `json:"siteId"`
+	Endpoint  string `json:"endpoint"`
+	PublicKey string `json:"publicKey"`
+	ServerIP  string `json:"serverIP"`
 }
 
 type TargetsByType struct {

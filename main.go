@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/fosrl/newt/logger"
@@ -235,18 +236,30 @@ func main() {
 			return
 		}
 
-		endpoint, err := resolveDomain(wgData.Endpoint)
-		if err != nil {
-			logger.Error("Failed to resolve endpoint: %v", err)
-			return
+		// Configure WireGuard with all sites as peers
+		var configBuilder strings.Builder
+
+		// Start with the private key
+		configBuilder.WriteString(fmt.Sprintf("private_key=%s\n", fixKey(privateKey.String())))
+
+		// Add each site as a peer
+		for _, site := range wgData.Sites {
+			siteHost, err := resolveDomain(site.Endpoint)
+			if err != nil {
+				logger.Warn("Failed to resolve endpoint for site %s: %v", site.SiteId, err)
+				continue
+			}
+
+			// Include peer info
+			configBuilder.WriteString(fmt.Sprintf("\n# Site %s\n", site.SiteId))
+			configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(site.PublicKey)))
+			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s/32\n", site.ServerIP))
+			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
+			configBuilder.WriteString("persistent_keepalive_interval=1\n")
 		}
 
-		// Configure WireGuard
-		config := fmt.Sprintf(`private_key=%s
-		public_key=%s
-		allowed_ip=%s/32
-		endpoint=%s
-		persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, endpoint)
+		config := configBuilder.String()
+		logger.Debug("WireGuard config: %s", config)
 
 		err = dev.IpcSet(config)
 		if err != nil {
@@ -377,18 +390,30 @@ func main() {
 
 		logger.Info("UAPI listener started")
 
-		host, err := resolveDomain(wgData.Endpoint)
-		if err != nil {
-			logger.Error("Failed to resolve endpoint: %v", err)
-			return
+		// Configure WireGuard with all sites as peers
+		var configBuilder strings.Builder
+
+		// Start with the private key
+		configBuilder.WriteString(fmt.Sprintf("private_key=%s\n", fixKey(privateKey.String())))
+
+		// Add each site as a peer
+		for _, site := range wgData.Sites {
+			siteHost, err := resolveDomain(site.Endpoint)
+			if err != nil {
+				logger.Warn("Failed to resolve endpoint for site %s: %v", site.SiteId, err)
+				continue
+			}
+
+			// Include peer info
+			configBuilder.WriteString(fmt.Sprintf("\n# Site %s\n", site.SiteId))
+			configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(site.PublicKey)))
+			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s/32\n", site.ServerIP))
+			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
+			configBuilder.WriteString("persistent_keepalive_interval=1\n")
 		}
 
-		// Configure WireGuard
-		config := fmt.Sprintf(`private_key=%s
-public_key=%s
-allowed_ip=%s/32
-endpoint=%s
-persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, host)
+		config := configBuilder.String()
+		logger.Debug("WireGuard config: %s", config)
 
 		err = dev.IpcSet(config)
 		if err != nil {
@@ -410,28 +435,28 @@ persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.Pub
 		close(stopHolepunch)
 
 		// Monitor the connection for activity
-		monitorConnection(dev, func() {
-			host, err := resolveDomain(endpoint)
-			if err != nil {
-				logger.Error("Failed to resolve endpoint: %v", err)
-				return
-			}
+		monitorConnection(dev, func() { // TODO: this now has to be per site
+			// 			host, err := resolveDomain(endpoint)
+			// 			if err != nil {
+			// 				logger.Error("Failed to resolve endpoint: %v", err)
+			// 				return
+			// 			}
 
-			// Configure WireGuard
-			config := fmt.Sprintf(`private_key=%s
-public_key=%s
-allowed_ip=%s/32
-endpoint=%s:21820
-persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, host)
+			// 			// Configure WireGuard
+			// 			config := fmt.Sprintf(`private_key=%s
+			// public_key=%s
+			// allowed_ip=%s/32
+			// endpoint=%s:21820
+			// persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, host)
 
-			err = dev.IpcSet(config)
-			if err != nil {
-				logger.Error("Failed to configure WireGuard device: %v", err)
-			}
+			// 			err = dev.IpcSet(config)
+			// 			if err != nil {
+			// 				logger.Error("Failed to configure WireGuard device: %v", err)
+			// 			}
 
-			logger.Info("Adjusted to point to relay!")
+			// 			logger.Info("Adjusted to point to relay!")
 
-			sendRelay(olm)
+			// 			sendRelay(olm)
 		})
 
 		logger.Info("WireGuard device created.")
