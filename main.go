@@ -31,7 +31,6 @@ import (
 // ConfigureInterface configures a network interface with an IP address and brings it up
 func ConfigureInterface(interfaceName string, wgData WgData) error {
 	var ipAddr string = wgData.TunnelIP
-	var destIP string = wgData.ServerIP
 
 	// Parse the IP address and network
 	ip, ipNet, err := net.ParseCIDR(ipAddr)
@@ -43,7 +42,7 @@ func ConfigureInterface(interfaceName string, wgData WgData) error {
 	case "linux":
 		return configureLinux(interfaceName, ip, ipNet)
 	case "darwin":
-		return configureDarwin(interfaceName, ip, destIP)
+		return configureDarwin(interfaceName, ip, ipNet, wgData.TunnelIP) // TODO: is tunnelip correct here? I think it has to do with the route addition in macos
 	default:
 		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
@@ -72,18 +71,13 @@ func findUnusedUTUN() (string, error) {
 	return "", fmt.Errorf("no unused utun interface found")
 }
 
-func configureDarwin(interfaceName string, ip net.IP, destIp string) error {
+func configureDarwin(interfaceName string, ip net.IP, ipNet *net.IPNet, destIp string) error {
 	logger.Info("Configuring darwin interface: %s", interfaceName)
 
-	iface, err := net.InterfaceByName(interfaceName)
-	if err != nil {
-		return fmt.Errorf("failed to get interface %s: %v", interfaceName, err)
-	}
-	logger.Info("Interface %s: %v", interfaceName, iface)
+	_, cidr := ipNet.Mask.Size()
+	ipStr := fmt.Sprintf("%s/%d", ip.String(), cidr)
 
-	ipStr := ip.String()
-
-	cmd := exec.Command("ifconfig", interfaceName, ipStr+"/24", destIp, "up") // TODO: dont hard code /24
+	cmd := exec.Command("ifconfig", interfaceName, ipStr, destIp, "up")
 	// print the command used
 	logger.Info("Running command: %v", cmd)
 
@@ -400,12 +394,12 @@ func main() {
 		for _, site := range wgData.Sites {
 			siteHost, err := resolveDomain(site.Endpoint)
 			if err != nil {
-				logger.Warn("Failed to resolve endpoint for site %s: %v", site.SiteId, err)
+				logger.Warn("Failed to resolve endpoint for site %d: %v", site.SiteId, err)
 				continue
 			}
 
 			// Include peer info
-			configBuilder.WriteString(fmt.Sprintf("\n# Site %s\n", site.SiteId))
+			// configBuilder.WriteString(fmt.Sprintf("\n# Site %d\n", site.SiteId))
 			configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(site.PublicKey)))
 			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s/32\n", site.ServerIP))
 			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))

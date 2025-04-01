@@ -26,7 +26,7 @@ type WgData struct {
 }
 
 type SiteConfig struct {
-	SiteId    string `json:"siteId"`
+	SiteId    int    `json:"siteId"`
 	Endpoint  string `json:"endpoint"`
 	PublicKey string `json:"publicKey"`
 	ServerIP  string `json:"serverIP"`
