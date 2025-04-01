@@ -229,36 +229,6 @@ func main() {
 			logger.Info("Error unmarshaling target data: %v", err)
 			return
 		}
-
-		// Configure WireGuard with all sites as peers
-		var configBuilder strings.Builder
-
-		// Start with the private key
-		configBuilder.WriteString(fmt.Sprintf("private_key=%s\n", fixKey(privateKey.String())))
-
-		// Add each site as a peer
-		for _, site := range wgData.Sites {
-			siteHost, err := resolveDomain(site.Endpoint)
-			if err != nil {
-				logger.Warn("Failed to resolve endpoint for site %s: %v", site.SiteId, err)
-				continue
-			}
-
-			// Include peer info
-			configBuilder.WriteString(fmt.Sprintf("\n# Site %s\n", site.SiteId))
-			configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(site.PublicKey)))
-			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s/32\n", site.ServerIP))
-			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
-			configBuilder.WriteString("persistent_keepalive_interval=1\n")
-		}
-
-		config := configBuilder.String()
-		logger.Debug("WireGuard config: %s", config)
-
-		err = dev.IpcSet(config)
-		if err != nil {
-			logger.Error("Failed to configure WireGuard device: %v", err)
-		}
 	})
 
 	connectTimes := 0
@@ -398,10 +368,18 @@ func main() {
 				continue
 			}
 
+			// split off the cidr of the server ip which is just a string and add /32 for the allowed ip
+			allowedIp := strings.Split(site.ServerIP, "/")
+			if len(allowedIp) > 1 {
+				allowedIp[1] = "32"
+			} else {
+				allowedIp = append(allowedIp, "32")
+			}
+			allowedIpStr := strings.Join(allowedIp, "/")
+
 			// Include peer info
-			// configBuilder.WriteString(fmt.Sprintf("\n# Site %d\n", site.SiteId))
 			configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(site.PublicKey)))
-			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s/32\n", site.ServerIP))
+			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s\n", allowedIpStr))
 			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
 			configBuilder.WriteString("persistent_keepalive_interval=1\n")
 		}
