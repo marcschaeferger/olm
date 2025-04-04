@@ -231,6 +231,8 @@ func sendUDPHolePunch(serverAddr string, olmID string, sourcePort uint16) error 
 		return fmt.Errorf("failed to send UDP packet: %v", err)
 	}
 
+	logger.Debug("Sent UDP hole punch to %s: %s", serverAddr, string(jsonData))
+
 	return nil
 }
 
