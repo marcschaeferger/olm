@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/olm/peermonitor"
 	"github.com/fosrl/olm/websocket"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
@@ -56,10 +56,12 @@ type EncryptedHolePunchMessage struct {
 }
 
 var (
+	peerMonitor        *peermonitor.PeerMonitor
 	stopHolepunch      chan struct{}
 	stopRegister       chan struct{}
 	olmToken           string
 	gerbilServerPubKey string
+	peerStatusMap      map[int]bool
 )
 
 const (
@@ -358,87 +360,6 @@ func keepSendingRegistration(olm *websocket.Client, publicKey string) {
 	}
 }
 
-func monitorConnection(dev *device.Device, onTimeout func()) {
-	const (
-		checkInterval = 100 * time.Millisecond // Check every 0.1 seconds
-		timeout       = 500 * time.Millisecond // Total timeout of 1.5 seconds
-	)
-
-	go func() {
-		ticker := time.NewTicker(checkInterval)
-		defer ticker.Stop()
-
-		timeoutTimer := time.NewTimer(timeout)
-		defer timeoutTimer.Stop()
-
-		// var lastSent uint64
-
-		for {
-			select {
-			case <-ticker.C:
-				// Get the current device statistics
-				deviceInfo, err := dev.IpcGet()
-				if err != nil {
-					logger.Error("Failed to get device statistics: %v", err)
-					continue
-				}
-
-				// Parse the statistics from the IPC output
-				stats := parseStatistics(deviceInfo)
-
-				logger.Info("Received: %d, Sent: %d", stats.received, stats.sent)
-
-				// Check if we've received any new bytes
-				if stats.received > 0 {
-					// Connection is successful, we received data
-					logger.Info("Connection established - received bytes detected")
-					return
-				}
-
-				// Update the last known values
-				// lastSent = stats.sent
-
-			case <-timeoutTimer.C:
-				// We've hit our timeout without seeing any received bytes
-				logger.Warn("Connection timeout - no data received within %v", timeout)
-				onTimeout()
-				return
-			}
-		}
-	}()
-}
-
-// statistics holds the parsed byte counts from the device
-type statistics struct {
-	received uint64
-	sent     uint64
-}
-
-// parseStatistics extracts the received and sent byte counts from the device info string
-func parseStatistics(info string) statistics {
-	var stats statistics
-
-	// Split the device info into lines
-	lines := strings.Split(info, "\n")
-
-	// Look for the transfer_receive and transfer_send lines
-	for _, line := range lines {
-		if strings.HasPrefix(line, "rx_bytes=") {
-			valueStr := strings.TrimPrefix(line, "rx_bytes=")
-			if value, err := strconv.ParseUint(valueStr, 10, 64); err == nil {
-				stats.received = value
-			}
-		} else if strings.HasPrefix(line, "tx_bytes=") {
-			valueStr := strings.TrimPrefix(line, "tx_bytes=")
-			if value, err := strconv.ParseUint(valueStr, 10, 64); err == nil {
-				stats.sent = value
-			}
-		}
-	}
-
-	return stats
-}
-
 func FindAvailableUDPPort(minPort, maxPort uint16) (uint16, error) {
 	if maxPort < minPort {
 		return 0, fmt.Errorf("invalid port range: min=%d, max=%d", minPort, maxPort)
@@ -473,4 +394,35 @@ func FindAvailableUDPPort(minPort, maxPort uint16) (uint16, error) {
 	}
 
 	return 0, fmt.Errorf("no available UDP ports found in range %d-%d", minPort, maxPort)
+}
+
+func handlePeerStatusChange(siteID int, connected bool, rtt time.Duration) {
+	// Check if status has changed
+	prevStatus, exists := peerStatusMap[siteID]
+	if !exists || prevStatus != connected {
+		if connected {
+			logger.Info("Peer %d is now connected (RTT: %v)", siteID, rtt)
+			// Add any actions you want to take when a peer connects
+
+			// Example: try to send a relay message if this is the first peer to connect
+			if !prevStatus && !exists {
+				// This is a new connection, not just a status update
+				go func() {
+					// Give wireguard a moment to establish properly
+					// time.Sleep(500 * time.Millisecond)
+					// if olm != nil {
+					// 	if err := sendRelay(olm); err != nil {
+					// 		logger.Error("Failed to send relay message: %v", err)
+					// 	}
+					// }
+				}()
+			}
+		} else {
+			logger.Warn("Peer %d is disconnected", siteID)
+			// Add any actions you want to take when a peer disconnects
+		}
+
+		// Update status map
+		peerStatusMap[siteID] = connected
+	}
 }

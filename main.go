@@ -15,8 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/olm/peermonitor"
 	"github.com/fosrl/olm/websocket"
 	"github.com/vishvananda/netlink"
 
@@ -133,6 +135,16 @@ func main() {
 
 	stopHolepunch = make(chan struct{})
 	stopRegister = make(chan struct{})
+	peerStatusMap = make(map[int]bool)
+
+	// Initialize the peer monitor
+	peerMonitor = peermonitor.NewPeerMonitor(handlePeerStatusChange)
+	defer peerMonitor.Close()
+
+	// Set custom monitoring parameters if needed
+	peerMonitor.SetInterval(5 * time.Second)
+	peerMonitor.SetTimeout(500 * time.Millisecond)
+	peerMonitor.SetMaxAttempts(3)
 
 	// if PANGOLIN_ENDPOINT, OLM_ID, and OLM_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
@@ -382,6 +394,13 @@ func main() {
 			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s\n", allowedIpStr))
 			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
 			configBuilder.WriteString("persistent_keepalive_interval=1\n")
+
+			err = peerMonitor.AddPeer(site.SiteId, siteHost)
+			if err != nil {
+				logger.Warn("Failed to setup monitoring for site %d: %v", site.SiteId, err)
+			} else {
+				logger.Info("Started monitoring for site %d at %s", site.SiteId, siteHost)
+			}
 		}
 
 		config := configBuilder.String()
@@ -406,30 +425,7 @@ func main() {
 
 		close(stopHolepunch)
 
-		// Monitor the connection for activity
-		monitorConnection(dev, func() { // TODO: this now has to be per site
-			// 			host, err := resolveDomain(endpoint)
-			// 			if err != nil {
-			// 				logger.Error("Failed to resolve endpoint: %v", err)
-			// 				return
-			// 			}
-
-			// 			// Configure WireGuard
-			// 			config := fmt.Sprintf(`private_key=%s
-			// public_key=%s
-			// allowed_ip=%s/32
-			// endpoint=%s:21820
-			// persistent_keepalive_interval=1`, fixKey(privateKey.String()), fixKey(wgData.PublicKey), wgData.ServerIP, host)
-
-			// 			err = dev.IpcSet(config)
-			// 			if err != nil {
-			// 				logger.Error("Failed to configure WireGuard device: %v", err)
-			// 			}
-
-			// 			logger.Info("Adjusted to point to relay!")
-
-			// 			sendRelay(olm)
-		})
+		peerMonitor.Start()
 
 		logger.Info("WireGuard device created.")
 	})
