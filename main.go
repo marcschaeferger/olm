@@ -135,16 +135,6 @@ func main() {
 
 	stopHolepunch = make(chan struct{})
 	stopRegister = make(chan struct{})
-	peerStatusMap = make(map[int]bool)
-
-	// Initialize the peer monitor
-	peerMonitor = peermonitor.NewPeerMonitor(handlePeerStatusChange)
-	defer peerMonitor.Close()
-
-	// Set custom monitoring parameters if needed
-	peerMonitor.SetInterval(5 * time.Second)
-	peerMonitor.SetTimeout(500 * time.Millisecond)
-	peerMonitor.SetMaxAttempts(3)
 
 	// if PANGOLIN_ENDPOINT, OLM_ID, and OLM_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
@@ -212,18 +202,18 @@ func main() {
 		logger.Fatal("Failed to create olm: %v", err)
 	}
 
-	sourcePort, err := FindAvailableUDPPort(49152, 65535)
-	if err != nil {
-		fmt.Printf("Error finding available port: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Create TUN device and network stack
 	var dev *device.Device
 	var wgData WgData
 	var holePunchData HolePunchData
 	var uapi *os.File
 	var tdev tun.Device
+
+	sourcePort, err := FindAvailableUDPPort(49152, 65535)
+	if err != nil {
+		fmt.Printf("Error finding available port: %v\n", err)
+		os.Exit(1)
+	}
 
 	olm.RegisterHandler("olm/terminate", func(msg websocket.WSMessage) {
 		logger.Info("Received terminate message")
@@ -366,6 +356,24 @@ func main() {
 
 		logger.Info("UAPI listener started")
 
+		primaryRelay, err := resolveDomain(endpoint)
+		if err != nil {
+			logger.Warn("Failed to resolve endpoint: %v", err)
+		}
+
+		peerMonitor = peermonitor.NewPeerMonitor(
+			func(siteID int, connected bool, rtt time.Duration) {
+				if connected {
+					logger.Info("Peer %d is now connected (RTT: %v)", siteID, rtt)
+				} else {
+					logger.Warn("Peer %d is disconnected", siteID)
+				}
+			},
+			fixKey(privateKey.String()),
+			olm,
+			dev,
+		)
+
 		// Configure WireGuard with all sites as peers
 		var configBuilder strings.Builder
 
@@ -395,11 +403,24 @@ func main() {
 			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
 			configBuilder.WriteString("persistent_keepalive_interval=1\n")
 
-			err = peerMonitor.AddPeer(site.SiteId, siteHost)
+			// take the first part of the allowedIp and the port from the endpoint and put them together
+			monitorAddress := strings.Split(site.ServerIP, "/")[0]
+
+			monitorPeer := fmt.Sprintf("%s:%d", monitorAddress, site.ServerPort)
+
+			wgConfig := &peermonitor.WireGuardConfig{
+				SiteID:       site.SiteId,
+				PublicKey:    fixKey(site.PublicKey),
+				ServerIP:     strings.Split(site.ServerIP, "/")[0],
+				Endpoint:     site.Endpoint,
+				PrimaryRelay: primaryRelay, // Use the main endpoint as relay
+			}
+
+			err = peerMonitor.AddPeer(site.SiteId, monitorPeer, wgConfig)
 			if err != nil {
 				logger.Warn("Failed to setup monitoring for site %d: %v", site.SiteId, err)
 			} else {
-				logger.Info("Started monitoring for site %d at %s", site.SiteId, siteHost)
+				logger.Info("Started monitoring for site %d at %s", site.SiteId, monitorPeer)
 			}
 		}
 

@@ -3,35 +3,54 @@ package peermonitor
 import (
 	"context"
 	"fmt"
-	"net"
 	"sync"
 	"time"
 
+	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/olm/websocket"
 	"github.com/fosrl/olm/wgtester"
+	"golang.zx2c4.com/wireguard/device"
 )
 
 // PeerMonitorCallback is the function type for connection status change callbacks
 type PeerMonitorCallback func(siteID int, connected bool, rtt time.Duration)
 
+// WireGuardConfig holds the WireGuard configuration for a peer
+type WireGuardConfig struct {
+	SiteID       int
+	PublicKey    string
+	ServerIP     string
+	Endpoint     string
+	PrimaryRelay string // The primary relay endpoint
+}
+
 // PeerMonitor handles monitoring the connection status to multiple WireGuard peers
 type PeerMonitor struct {
 	monitors    map[int]*wgtester.Client
+	configs     map[int]*WireGuardConfig
 	callback    PeerMonitorCallback
 	mutex       sync.Mutex
 	running     bool
 	interval    time.Duration
 	timeout     time.Duration
 	maxAttempts int
+	privateKey  string
+	wsClient    *websocket.Client
+	device      *device.Device
 }
 
 // NewPeerMonitor creates a new peer monitor with the given callback
-func NewPeerMonitor(callback PeerMonitorCallback) *PeerMonitor {
+func NewPeerMonitor(callback PeerMonitorCallback, privateKey string, wsClient *websocket.Client, device *device.Device) *PeerMonitor {
 	return &PeerMonitor{
 		monitors:    make(map[int]*wgtester.Client),
+		configs:     make(map[int]*WireGuardConfig),
 		callback:    callback,
-		interval:    5 * time.Second, // Default check interval
+		interval:    1 * time.Second, // Default check interval
 		timeout:     500 * time.Millisecond,
 		maxAttempts: 3,
+		privateKey:  privateKey,
+		wsClient:    wsClient,
+		device:      device,
 	}
 }
 
@@ -75,7 +94,7 @@ func (pm *PeerMonitor) SetMaxAttempts(attempts int) {
 }
 
 // AddPeer adds a new peer to monitor
-func (pm *PeerMonitor) AddPeer(siteID int, endpoint string) error {
+func (pm *PeerMonitor) AddPeer(siteID int, endpoint string, wgConfig *WireGuardConfig) error {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
 
@@ -83,11 +102,6 @@ func (pm *PeerMonitor) AddPeer(siteID int, endpoint string) error {
 	if _, exists := pm.monitors[siteID]; exists {
 		// Update the endpoint instead of creating a new monitor
 		pm.RemovePeer(siteID)
-	}
-
-	// Add UDP port if not present, assuming default WireGuard port
-	if _, _, err := net.SplitHostPort(endpoint); err != nil {
-		endpoint = endpoint + ":51820" // Default WireGuard port
 	}
 
 	client, err := wgtester.NewClient(endpoint)
@@ -100,14 +114,15 @@ func (pm *PeerMonitor) AddPeer(siteID int, endpoint string) error {
 	client.SetTimeout(pm.timeout)
 	client.SetMaxAttempts(pm.maxAttempts)
 
-	// Store the client
+	// Store the client and config
 	pm.monitors[siteID] = client
+	pm.configs[siteID] = wgConfig
 
 	// If monitor is already running, start monitoring this peer
 	if pm.running {
 		siteIDCopy := siteID // Create a copy for the closure
 		err = client.StartMonitor(func(status wgtester.ConnectionStatus) {
-			pm.callback(siteIDCopy, status.Connected, status.RTT)
+			pm.handleConnectionStatusChange(siteIDCopy, status)
 		})
 	}
 
@@ -127,6 +142,7 @@ func (pm *PeerMonitor) RemovePeer(siteID int) {
 	client.StopMonitor()
 	client.Close()
 	delete(pm.monitors, siteID)
+	delete(pm.configs, siteID)
 }
 
 // Start begins monitoring all peers
@@ -144,9 +160,70 @@ func (pm *PeerMonitor) Start() {
 	for siteID, client := range pm.monitors {
 		siteIDCopy := siteID // Create a copy for the closure
 		client.StartMonitor(func(status wgtester.ConnectionStatus) {
-			pm.callback(siteIDCopy, status.Connected, status.RTT)
+			pm.handleConnectionStatusChange(siteIDCopy, status)
 		})
 	}
+}
+
+// handleConnectionStatusChange is called when a peer's connection status changes
+func (pm *PeerMonitor) handleConnectionStatusChange(siteID int, status wgtester.ConnectionStatus) {
+	// Call the user-provided callback first
+	if pm.callback != nil {
+		pm.callback(siteID, status.Connected, status.RTT)
+	}
+
+	// If disconnected, handle failover
+	if !status.Connected {
+		pm.handleFailover(siteID)
+	}
+}
+
+// handleFailover handles failover to the relay server when a peer is disconnected
+func (pm *PeerMonitor) handleFailover(siteID int) {
+	pm.mutex.Lock()
+	config, exists := pm.configs[siteID]
+	pm.mutex.Unlock()
+
+	if !exists {
+		return
+	}
+
+	// Configure WireGuard to use the relay
+	wgConfig := fmt.Sprintf(`private_key=%s
+public_key=%s
+allowed_ip=%s/32
+endpoint=%s:21820
+persistent_keepalive_interval=1`, pm.privateKey, config.PublicKey, config.ServerIP, config.PrimaryRelay)
+
+	err := pm.device.IpcSet(wgConfig)
+	if err != nil {
+		fmt.Printf("Failed to configure WireGuard device: %v\n", err)
+		return
+	}
+
+	fmt.Printf("Adjusted peer %d to point to relay!\n", siteID)
+
+	// Send relay message to the server
+	if pm.wsClient != nil {
+		pm.sendRelay(siteID)
+	}
+}
+
+// sendRelay sends a relay message to the server
+func (pm *PeerMonitor) sendRelay(siteID int) error {
+	if pm.wsClient == nil {
+		return fmt.Errorf("websocket client is nil")
+	}
+
+	err := pm.wsClient.SendMessage("olm/wg/relay", map[string]interface{}{
+		"siteId": siteID,
+	})
+	if err != nil {
+		logger.Error("Failed to send registration message: %v", err)
+		return err
+	}
+	logger.Info("Sent relay message")
+	return nil
 }
 
 // Stop stops monitoring all peers

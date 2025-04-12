@@ -26,10 +26,11 @@ type WgData struct {
 }
 
 type SiteConfig struct {
-	SiteId    int    `json:"siteId"`
-	Endpoint  string `json:"endpoint"`
-	PublicKey string `json:"publicKey"`
-	ServerIP  string `json:"serverIP"`
+	SiteId     int    `json:"siteId"`
+	Endpoint   string `json:"endpoint"`
+	PublicKey  string `json:"publicKey"`
+	ServerIP   string `json:"serverIP"`
+	ServerPort uint16 `json:"serverPort"`
 }
 
 type TargetsByType struct {
@@ -61,7 +62,6 @@ var (
 	stopRegister       chan struct{}
 	olmToken           string
 	gerbilServerPubKey string
-	peerStatusMap      map[int]bool
 )
 
 const (
@@ -319,18 +319,6 @@ func keepSendingUDPHolePunch(endpoint string, olmID string, sourcePort uint16) {
 	}
 }
 
-func sendRelay(olm *websocket.Client) error {
-	err := olm.SendMessage("olm/wg/relay", map[string]interface{}{
-		"doIt": "now",
-	})
-	if err != nil {
-		logger.Error("Failed to send registration message: %v", err)
-		return err
-	}
-	logger.Info("Sent relay message")
-	return nil
-}
-
 func sendRegistration(olm *websocket.Client, publicKey string) error {
 	err := olm.SendMessage("olm/wg/register", map[string]interface{}{
 		"publicKey": publicKey,
@@ -394,35 +382,4 @@ func FindAvailableUDPPort(minPort, maxPort uint16) (uint16, error) {
 	}
 
 	return 0, fmt.Errorf("no available UDP ports found in range %d-%d", minPort, maxPort)
-}
-
-func handlePeerStatusChange(siteID int, connected bool, rtt time.Duration) {
-	// Check if status has changed
-	prevStatus, exists := peerStatusMap[siteID]
-	if !exists || prevStatus != connected {
-		if connected {
-			logger.Info("Peer %d is now connected (RTT: %v)", siteID, rtt)
-			// Add any actions you want to take when a peer connects
-
-			// Example: try to send a relay message if this is the first peer to connect
-			if !prevStatus && !exists {
-				// This is a new connection, not just a status update
-				go func() {
-					// Give wireguard a moment to establish properly
-					// time.Sleep(500 * time.Millisecond)
-					// if olm != nil {
-					// 	if err := sendRelay(olm); err != nil {
-					// 		logger.Error("Failed to send relay message: %v", err)
-					// 	}
-					// }
-				}()
-			}
-		} else {
-			logger.Warn("Peer %d is disconnected", siteID)
-			// Add any actions you want to take when a peer disconnects
-		}
-
-		// Update status map
-		peerStatusMap[siteID] = connected
-	}
 }
