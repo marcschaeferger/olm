@@ -406,7 +406,7 @@ func main() {
 			// take the first part of the allowedIp and the port from the endpoint and put them together
 			monitorAddress := strings.Split(site.ServerIP, "/")[0]
 
-			monitorPeer := fmt.Sprintf("%s:%d", monitorAddress, site.ServerPort)
+			monitorPeer := fmt.Sprintf("%s:%d", monitorAddress, site.ServerPort+1) // +1 for the monitor port
 
 			wgConfig := &peermonitor.WireGuardConfig{
 				SiteID:       site.SiteId,

@@ -22,6 +22,7 @@ type Client struct {
 	handlers    map[string]MessageHandler
 	done        chan struct{}
 	handlersMux sync.RWMutex
+	writeMux    sync.Mutex
 
 	reconnectInterval time.Duration
 	isConnected       bool
@@ -110,6 +111,8 @@ func (c *Client) SendMessage(messageType string, data interface{}) error {
 		Data: data,
 	}
 
+	c.writeMux.Lock()
+	defer c.writeMux.Unlock()
 	return c.conn.WriteJSON(msg)
 }
 
@@ -334,7 +337,10 @@ func (c *Client) pingMonitor() {
 		case <-c.done:
 			return
 		case <-ticker.C:
-			if err := c.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+			c.writeMux.Lock()
+			err := c.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second))
+			c.writeMux.Unlock()
+			if err != nil {
 				logger.Error("Ping failed: %v", err)
 				c.reconnect()
 				return
