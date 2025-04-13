@@ -60,6 +60,7 @@ var (
 	peerMonitor        *peermonitor.PeerMonitor
 	stopHolepunch      chan struct{}
 	stopRegister       chan struct{}
+	stopPing           chan struct{}
 	olmToken           string
 	gerbilServerPubKey string
 )
@@ -382,4 +383,41 @@ func FindAvailableUDPPort(minPort, maxPort uint16) (uint16, error) {
 	}
 
 	return 0, fmt.Errorf("no available UDP ports found in range %d-%d", minPort, maxPort)
+}
+
+func sendPing(olm *websocket.Client) error {
+	err := olm.SendMessage("olm/ping", map[string]interface{}{
+		"timestamp": time.Now().Unix(),
+	})
+	if err != nil {
+		logger.Error("Failed to send ping message: %v", err)
+		return err
+	}
+	logger.Debug("Sent ping message")
+	return nil
+}
+
+func keepSendingPing(olm *websocket.Client) {
+	// Send ping immediately on startup
+	if err := sendPing(olm); err != nil {
+		logger.Error("Failed to send initial ping: %v", err)
+	} else {
+		logger.Info("Sent initial ping message")
+	}
+
+	// Set up ticker for one minute intervals
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopPing:
+			logger.Info("Stopping ping messages")
+			return
+		case <-ticker.C:
+			if err := sendPing(olm); err != nil {
+				logger.Error("Failed to send periodic ping: %v", err)
+			}
+		}
+	}
 }

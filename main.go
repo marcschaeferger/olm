@@ -135,6 +135,7 @@ func main() {
 
 	stopHolepunch = make(chan struct{})
 	stopRegister = make(chan struct{})
+	stopPing = make(chan struct{})
 
 	// if PANGOLIN_ENDPOINT, OLM_ID, and OLM_SECRET are set as environment variables, they will be used as default values
 	endpoint = os.Getenv("PANGOLIN_ENDPOINT")
@@ -473,6 +474,7 @@ func main() {
 		logger.Debug("Public key: %s", publicKey)
 
 		go keepSendingRegistration(olm, publicKey.String())
+		go keepSendingPing(olm)
 
 		logger.Info("Sent registration message")
 		return nil
@@ -507,6 +509,13 @@ func main() {
 		// Channel already closed
 	default:
 		close(stopRegister)
+	}
+
+	select {
+	case <-stopPing:
+		// Channel already closed
+	default:
+		close(stopPing)
 	}
 
 	uapi.Close()
