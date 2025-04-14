@@ -76,6 +76,35 @@ type fixedPortBind struct {
 	conn.Bind
 }
 
+// PeerAction represents a request to add, update, or remove a peer
+type PeerAction struct {
+	Action   string     `json:"action"`   // "add", "update", or "remove"
+	SiteInfo SiteConfig `json:"siteInfo"` // Site configuration information
+}
+
+// UpdatePeerData represents the data needed to update a peer
+type UpdatePeerData struct {
+	SiteId     int    `json:"siteId"`
+	Endpoint   string `json:"endpoint"`
+	PublicKey  string `json:"publicKey"`
+	ServerIP   string `json:"serverIP"`
+	ServerPort uint16 `json:"serverPort"`
+}
+
+// AddPeerData represents the data needed to add a peer
+type AddPeerData struct {
+	SiteId     int    `json:"siteId"`
+	Endpoint   string `json:"endpoint"`
+	PublicKey  string `json:"publicKey"`
+	ServerIP   string `json:"serverIP"`
+	ServerPort uint16 `json:"serverPort"`
+}
+
+// RemovePeerData represents the data needed to remove a peer
+type RemovePeerData struct {
+	SiteId int `json:"siteId"`
+}
+
 func (b *fixedPortBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	// Ignore the requested port and use our fixed port
 	return b.Bind.Open(b.port)
@@ -420,4 +449,88 @@ func keepSendingPing(olm *websocket.Client) {
 			}
 		}
 	}
+}
+
+// ConfigurePeer sets up or updates a peer within the WireGuard device
+func ConfigurePeer(dev *device.Device, siteConfig SiteConfig, privateKey wgtypes.Key, endpoint string) error {
+	siteHost, err := resolveDomain(siteConfig.Endpoint)
+	if err != nil {
+		return fmt.Errorf("failed to resolve endpoint for site %d: %v", siteConfig.SiteId, err)
+	}
+
+	// Split off the CIDR of the server IP which is just a string and add /32 for the allowed IP
+	allowedIp := strings.Split(siteConfig.ServerIP, "/")
+	if len(allowedIp) > 1 {
+		allowedIp[1] = "32"
+	} else {
+		allowedIp = append(allowedIp, "32")
+	}
+	allowedIpStr := strings.Join(allowedIp, "/")
+
+	// Construct WireGuard config for this peer
+	var configBuilder strings.Builder
+	configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(siteConfig.PublicKey)))
+	configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s\n", allowedIpStr))
+	configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
+	configBuilder.WriteString("persistent_keepalive_interval=1\n")
+
+	config := configBuilder.String()
+	logger.Debug("Configuring peer with config: %s", config)
+
+	err = dev.IpcSet(config)
+	if err != nil {
+		return fmt.Errorf("failed to configure WireGuard peer: %v", err)
+	}
+
+	// Set up peer monitoring
+	if peerMonitor != nil {
+		monitorAddress := strings.Split(siteConfig.ServerIP, "/")[0]
+		monitorPeer := fmt.Sprintf("%s:%d", monitorAddress, siteConfig.ServerPort+1) // +1 for the monitor port
+
+		primaryRelay, err := resolveDomain(endpoint) // Using global endpoint variable
+		if err != nil {
+			logger.Warn("Failed to resolve primary relay endpoint: %v", err)
+		}
+
+		wgConfig := &peermonitor.WireGuardConfig{
+			SiteID:       siteConfig.SiteId,
+			PublicKey:    fixKey(siteConfig.PublicKey),
+			ServerIP:     strings.Split(siteConfig.ServerIP, "/")[0],
+			Endpoint:     siteConfig.Endpoint,
+			PrimaryRelay: primaryRelay,
+		}
+
+		err = peerMonitor.AddPeer(siteConfig.SiteId, monitorPeer, wgConfig)
+		if err != nil {
+			logger.Warn("Failed to setup monitoring for site %d: %v", siteConfig.SiteId, err)
+		} else {
+			logger.Info("Started monitoring for site %d at %s", siteConfig.SiteId, monitorPeer)
+		}
+	}
+
+	return nil
+}
+
+// RemovePeer removes a peer from the WireGuard device
+func RemovePeer(dev *device.Device, siteId int, publicKey string) error {
+	// Construct WireGuard config to remove the peer
+	var configBuilder strings.Builder
+	configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(publicKey)))
+	configBuilder.WriteString("remove=true\n")
+
+	config := configBuilder.String()
+	logger.Debug("Removing peer with config: %s", config)
+
+	err := dev.IpcSet(config)
+	if err != nil {
+		return fmt.Errorf("failed to remove WireGuard peer: %v", err)
+	}
+
+	// Stop monitoring this peer
+	if peerMonitor != nil {
+		peerMonitor.RemovePeer(siteId)
+		logger.Info("Stopped monitoring for site %d", siteId)
+	}
+
+	return nil
 }

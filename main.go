@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -216,22 +215,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	olm.RegisterHandler("olm/terminate", func(msg websocket.WSMessage) {
-		logger.Info("Received terminate message")
-		olm.Close()
-	})
+	olm.RegisterHandler("olm/wg/holepunch", func(msg websocket.WSMessage) {
+		logger.Info("Received message: %v", msg.Data)
 
-	olm.RegisterHandler("olm/wg/update", func(msg websocket.WSMessage) {
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
 			logger.Info("Error marshaling data: %v", err)
 			return
 		}
 
-		if err := json.Unmarshal(jsonData, &wgData); err != nil {
+		if err := json.Unmarshal(jsonData, &holePunchData); err != nil {
 			logger.Info("Error unmarshaling target data: %v", err)
 			return
 		}
+
+		gerbilServerPubKey = holePunchData.ServerPubKey
 	})
 
 	connectTimes := 0
@@ -357,11 +355,6 @@ func main() {
 
 		logger.Info("UAPI listener started")
 
-		primaryRelay, err := resolveDomain(endpoint)
-		if err != nil {
-			logger.Warn("Failed to resolve endpoint: %v", err)
-		}
-
 		peerMonitor = peermonitor.NewPeerMonitor(
 			func(siteID int, connected bool, rtt time.Duration) {
 				if connected {
@@ -375,62 +368,14 @@ func main() {
 			dev,
 		)
 
-		// Configure WireGuard with all sites as peers
-		var configBuilder strings.Builder
-
-		// Start with the private key
-		configBuilder.WriteString(fmt.Sprintf("private_key=%s\n", fixKey(privateKey.String())))
-
-		// Add each site as a peer
+		// loop over the sites and call ConfigurePeer for each one
 		for _, site := range wgData.Sites {
-			siteHost, err := resolveDomain(site.Endpoint)
+			err = ConfigurePeer(dev, site, privateKey, endpoint)
 			if err != nil {
-				logger.Warn("Failed to resolve endpoint for site %d: %v", site.SiteId, err)
-				continue
+				logger.Error("Failed to configure peer: %v", err)
+				return
 			}
-
-			// split off the cidr of the server ip which is just a string and add /32 for the allowed ip
-			allowedIp := strings.Split(site.ServerIP, "/")
-			if len(allowedIp) > 1 {
-				allowedIp[1] = "32"
-			} else {
-				allowedIp = append(allowedIp, "32")
-			}
-			allowedIpStr := strings.Join(allowedIp, "/")
-
-			// Include peer info
-			configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(site.PublicKey)))
-			configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s\n", allowedIpStr))
-			configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
-			configBuilder.WriteString("persistent_keepalive_interval=1\n")
-
-			// take the first part of the allowedIp and the port from the endpoint and put them together
-			monitorAddress := strings.Split(site.ServerIP, "/")[0]
-
-			monitorPeer := fmt.Sprintf("%s:%d", monitorAddress, site.ServerPort+1) // +1 for the monitor port
-
-			wgConfig := &peermonitor.WireGuardConfig{
-				SiteID:       site.SiteId,
-				PublicKey:    fixKey(site.PublicKey),
-				ServerIP:     strings.Split(site.ServerIP, "/")[0],
-				Endpoint:     site.Endpoint,
-				PrimaryRelay: primaryRelay, // Use the main endpoint as relay
-			}
-
-			err = peerMonitor.AddPeer(site.SiteId, monitorPeer, wgConfig)
-			if err != nil {
-				logger.Warn("Failed to setup monitoring for site %d: %v", site.SiteId, err)
-			} else {
-				logger.Info("Started monitoring for site %d at %s", site.SiteId, monitorPeer)
-			}
-		}
-
-		config := configBuilder.String()
-		logger.Debug("WireGuard config: %s", config)
-
-		err = dev.IpcSet(config)
-		if err != nil {
-			logger.Error("Failed to configure WireGuard device: %v", err)
+			logger.Info("Configured peer %s", site.PublicKey)
 		}
 
 		// Bring up the device
@@ -452,21 +397,148 @@ func main() {
 		logger.Info("WireGuard device created.")
 	})
 
-	olm.RegisterHandler("olm/wg/holepunch", func(msg websocket.WSMessage) {
-		logger.Info("Received message: %v", msg.Data)
+	olm.RegisterHandler("olm/wg/peer/update", func(msg websocket.WSMessage) {
+		logger.Info("Received update-peer message")
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
-			logger.Info("Error marshaling data: %v", err)
+			logger.Error("Error marshaling data: %v", err)
 			return
 		}
 
-		if err := json.Unmarshal(jsonData, &holePunchData); err != nil {
-			logger.Info("Error unmarshaling target data: %v", err)
+		var updateData UpdatePeerData
+		if err := json.Unmarshal(jsonData, &updateData); err != nil {
+			logger.Error("Error unmarshaling update data: %v", err)
 			return
 		}
 
-		gerbilServerPubKey = holePunchData.ServerPubKey
+		// Convert to SiteConfig
+		siteConfig := SiteConfig{
+			SiteId:     updateData.SiteId,
+			Endpoint:   updateData.Endpoint,
+			PublicKey:  updateData.PublicKey,
+			ServerIP:   updateData.ServerIP,
+			ServerPort: updateData.ServerPort,
+		}
+
+		// Update the peer in WireGuard
+		if dev != nil {
+			if err := ConfigurePeer(dev, siteConfig, privateKey, endpoint); err != nil {
+				logger.Error("Failed to update peer: %v", err)
+				// Send error response if needed
+				return
+			}
+
+			// Update successful
+			logger.Info("Successfully updated peer for site %d", updateData.SiteId)
+			// If this is part of a WgData structure, update it
+			for i, site := range wgData.Sites {
+				if site.SiteId == updateData.SiteId {
+					wgData.Sites[i] = siteConfig
+					break
+				}
+			}
+		} else {
+			logger.Error("WireGuard device not initialized")
+		}
+	})
+
+	// Handler for adding a new peer
+	olm.RegisterHandler("olm/wg/peer/add", func(msg websocket.WSMessage) {
+		logger.Info("Received add-peer message")
+
+		jsonData, err := json.Marshal(msg.Data)
+		if err != nil {
+			logger.Error("Error marshaling data: %v", err)
+			return
+		}
+
+		var addData AddPeerData
+		if err := json.Unmarshal(jsonData, &addData); err != nil {
+			logger.Error("Error unmarshaling add data: %v", err)
+			return
+		}
+
+		// Convert to SiteConfig
+		siteConfig := SiteConfig{
+			SiteId:     addData.SiteId,
+			Endpoint:   addData.Endpoint,
+			PublicKey:  addData.PublicKey,
+			ServerIP:   addData.ServerIP,
+			ServerPort: addData.ServerPort,
+		}
+
+		// Add the peer to WireGuard
+		if dev != nil {
+			if err := ConfigurePeer(dev, siteConfig, privateKey, endpoint); err != nil {
+				logger.Error("Failed to add peer: %v", err)
+				return
+			}
+
+			// Add successful
+			logger.Info("Successfully added peer for site %d", addData.SiteId)
+
+			// Update WgData with the new peer
+			wgData.Sites = append(wgData.Sites, siteConfig)
+		} else {
+			logger.Error("WireGuard device not initialized")
+		}
+	})
+
+	// Handler for removing a peer
+	olm.RegisterHandler("olm/wg/peer/remove", func(msg websocket.WSMessage) {
+		logger.Info("Received remove-peer message")
+
+		jsonData, err := json.Marshal(msg.Data)
+		if err != nil {
+			logger.Error("Error marshaling data: %v", err)
+			return
+		}
+
+		var removeData RemovePeerData
+		if err := json.Unmarshal(jsonData, &removeData); err != nil {
+			logger.Error("Error unmarshaling remove data: %v", err)
+			return
+		}
+
+		// Find the peer to remove
+		var peerToRemove *SiteConfig
+		var newSites []SiteConfig
+
+		for _, site := range wgData.Sites {
+			if site.SiteId == removeData.SiteId {
+				peerToRemove = &site
+			} else {
+				newSites = append(newSites, site)
+			}
+		}
+
+		if peerToRemove == nil {
+			logger.Error("Peer with site ID %d not found", removeData.SiteId)
+			return
+		}
+
+		// Remove the peer from WireGuard
+		if dev != nil {
+			if err := RemovePeer(dev, removeData.SiteId, peerToRemove.PublicKey); err != nil {
+				logger.Error("Failed to remove peer: %v", err)
+				// Send error response if needed
+				return
+			}
+
+			// Remove successful
+			logger.Info("Successfully removed peer for site %d", removeData.SiteId)
+
+			// Update WgData to remove the peer
+			wgData.Sites = newSites
+		} else {
+			logger.Error("WireGuard device not initialized")
+		}
+	})
+
+	olm.RegisterHandler("olm/terminate", func(msg websocket.WSMessage) {
+		logger.Info("Received terminate message")
+		olm.Close()
 	})
 
 	olm.OnConnect(func() error {
