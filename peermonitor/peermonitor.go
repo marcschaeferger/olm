@@ -46,8 +46,8 @@ func NewPeerMonitor(callback PeerMonitorCallback, privateKey string, wsClient *w
 		configs:     make(map[int]*WireGuardConfig),
 		callback:    callback,
 		interval:    1 * time.Second, // Default check interval
-		timeout:     1000 * time.Millisecond,
-		maxAttempts: 5,
+		timeout:     2500 * time.Millisecond,
+		maxAttempts: 8,
 		privateKey:  privateKey,
 		wsClient:    wsClient,
 		device:      device,

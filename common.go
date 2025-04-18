@@ -469,6 +469,7 @@ func ConfigurePeer(dev *device.Device, siteConfig SiteConfig, privateKey wgtypes
 
 	// Construct WireGuard config for this peer
 	var configBuilder strings.Builder
+	configBuilder.WriteString(fmt.Sprintf("private_key=%s\n", fixKey(privateKey.String())))
 	configBuilder.WriteString(fmt.Sprintf("public_key=%s\n", fixKey(siteConfig.PublicKey)))
 	configBuilder.WriteString(fmt.Sprintf("allowed_ip=%s\n", allowedIpStr))
 	configBuilder.WriteString(fmt.Sprintf("endpoint=%s\n", siteHost))
