@@ -398,7 +398,7 @@ func main() {
 	})
 
 	olm.RegisterHandler("olm/wg/peer/update", func(msg websocket.WSMessage) {
-		logger.Info("Received update-peer message")
+		logger.Info("Received update-peer message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
@@ -445,7 +445,7 @@ func main() {
 
 	// Handler for adding a new peer
 	olm.RegisterHandler("olm/wg/peer/add", func(msg websocket.WSMessage) {
-		logger.Info("Received add-peer message")
+		logger.Info("Received add-peer message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
@@ -487,7 +487,7 @@ func main() {
 
 	// Handler for removing a peer
 	olm.RegisterHandler("olm/wg/peer/remove", func(msg websocket.WSMessage) {
-		logger.Info("Received remove-peer message")
+		logger.Info("Received remove-peer message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
