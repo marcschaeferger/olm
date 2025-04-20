@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/olm/httpserver"
 	"github.com/fosrl/olm/peermonitor"
 	"github.com/fosrl/olm/websocket"
 	"github.com/vishvananda/netlink"
@@ -130,6 +131,8 @@ func main() {
 		err           error
 		logLevel      string
 		interfaceName string
+		enableHTTP    bool
+		httpAddr      string
 	)
 
 	stopHolepunch = make(chan struct{})
@@ -144,6 +147,7 @@ func main() {
 	dns = os.Getenv("DNS")
 	logLevel = os.Getenv("LOG_LEVEL")
 	interfaceName = os.Getenv("INTERFACE")
+	httpAddr = os.Getenv("HTTP_ADDR")
 
 	if endpoint == "" {
 		flag.StringVar(&endpoint, "endpoint", "", "Endpoint of your Pangolin server")
@@ -166,6 +170,11 @@ func main() {
 	if interfaceName == "" {
 		flag.StringVar(&interfaceName, "interface", "olm", "Name of the WireGuard interface")
 	}
+	if httpAddr == "" {
+		flag.StringVar(&httpAddr, "http-addr", ":9452", "HTTP server address (e.g., ':9452')")
+	}
+
+	flag.BoolVar(&enableHTTP, "http", false, "Enable HTTP server")
 
 	// do a --version check
 	version := flag.Bool("version", false, "Print the version")
@@ -180,6 +189,32 @@ func main() {
 	logger.Init()
 	loggerLevel := parseLogLevel(logLevel)
 	logger.GetLogger().SetLevel(parseLogLevel(logLevel))
+
+	var httpServer *httpserver.HTTPServer
+	if enableHTTP {
+		httpServer = httpserver.NewHTTPServer(httpAddr)
+		if err := httpServer.Start(); err != nil {
+			logger.Fatal("Failed to start HTTP server: %v", err)
+		}
+
+		// Use a goroutine to handle connection requests
+		go func() {
+			for req := range httpServer.GetConnectionChannel() {
+				logger.Info("Received connection request via HTTP: id=%s, endpoint=%s", req.ID, req.Endpoint)
+
+				// Set the connection parameters
+				id = req.ID
+				secret = req.Secret
+				endpoint = req.Endpoint
+			}
+		}()
+	}
+
+	// wait until we have a client id and secret and endpoint
+	for id == "" || secret == "" || endpoint == "" {
+		logger.Debug("Waiting for client ID, secret, and endpoint...")
+		time.Sleep(1 * time.Second)
+	}
 
 	// parse the mtu string into an int
 	mtuInt, err = strconv.Atoi(mtu)
@@ -357,6 +392,9 @@ func main() {
 
 		peerMonitor = peermonitor.NewPeerMonitor(
 			func(siteID int, connected bool, rtt time.Duration) {
+				if httpServer != nil {
+					httpServer.UpdatePeerStatus(siteID, connected, rtt)
+				}
 				if connected {
 					logger.Info("Peer %d is now connected (RTT: %v)", siteID, rtt)
 				} else {
@@ -370,6 +408,9 @@ func main() {
 
 		// loop over the sites and call ConfigurePeer for each one
 		for _, site := range wgData.Sites {
+			if httpServer != nil {
+				httpServer.UpdatePeerStatus(site.SiteId, false, 0)
+			}
 			err = ConfigurePeer(dev, site, privateKey, endpoint)
 			if err != nil {
 				logger.Error("Failed to configure peer: %v", err)
@@ -547,6 +588,10 @@ func main() {
 
 		go keepSendingRegistration(olm, publicKey.String())
 		go keepSendingPing(olm)
+
+		if httpServer != nil {
+			httpServer.SetConnectionStatus(true)
+		}
 
 		logger.Info("Sent registration message")
 		return nil
