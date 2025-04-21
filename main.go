@@ -311,22 +311,6 @@ func main() {
 			logger.Error("Failed to configure interface: %v", err)
 		}
 
-		// loop over the sites and call ConfigurePeer for each one
-		for _, site := range wgData.Sites {
-			if httpServer != nil {
-				httpServer.UpdatePeerStatus(site.SiteId, false, 0)
-			}
-			err = ConfigurePeer(dev, site, privateKey, endpoint)
-			if err != nil {
-				logger.Error("Failed to configure peer: %v", err)
-				return
-			}
-
-			DarwinAddRoute(site.ServerIP, "", interfaceName)
-
-			logger.Info("Configured peer %s", site.PublicKey)
-		}
-
 		peerMonitor = peermonitor.NewPeerMonitor(
 			func(siteID int, connected bool, rtt time.Duration) {
 				if httpServer != nil {
@@ -342,6 +326,22 @@ func main() {
 			olm,
 			dev,
 		)
+
+		// loop over the sites and call ConfigurePeer for each one
+		for _, site := range wgData.Sites {
+			if httpServer != nil {
+				httpServer.UpdatePeerStatus(site.SiteId, false, 0)
+			}
+			err = ConfigurePeer(dev, site, privateKey, endpoint)
+			if err != nil {
+				logger.Error("Failed to configure peer: %v", err)
+				return
+			}
+
+			DarwinAddRoute(site.ServerIP, "", interfaceName)
+
+			logger.Info("Configured peer %s", site.PublicKey)
+		}
 
 		peerMonitor.Start()
 
