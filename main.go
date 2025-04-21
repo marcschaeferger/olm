@@ -6,11 +6,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"os/signal"
-	"regexp"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -20,7 +17,6 @@ import (
 	"github.com/fosrl/olm/httpserver"
 	"github.com/fosrl/olm/peermonitor"
 	"github.com/fosrl/olm/websocket"
-	"github.com/vishvananda/netlink"
 
 	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/device"
@@ -29,95 +25,6 @@ import (
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
-
-// ConfigureInterface configures a network interface with an IP address and brings it up
-func ConfigureInterface(interfaceName string, wgData WgData) error {
-	var ipAddr string = wgData.TunnelIP
-
-	// Parse the IP address and network
-	ip, ipNet, err := net.ParseCIDR(ipAddr)
-	if err != nil {
-		return fmt.Errorf("invalid IP address: %v", err)
-	}
-
-	switch runtime.GOOS {
-	case "linux":
-		return configureLinux(interfaceName, ip, ipNet)
-	case "darwin":
-		return configureDarwin(interfaceName, ip, ipNet, wgData.TunnelIP) // TODO: is tunnelip correct here? I think it has to do with the route addition in macos
-	default:
-		return fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
-	}
-}
-
-func findUnusedUTUN() (string, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("failed to list interfaces: %v", err)
-	}
-	used := make(map[int]bool)
-	re := regexp.MustCompile(`^utun(\d+)$`)
-	for _, iface := range ifaces {
-		if matches := re.FindStringSubmatch(iface.Name); len(matches) == 2 {
-			if num, err := strconv.Atoi(matches[1]); err == nil {
-				used[num] = true
-			}
-		}
-	}
-	// Try utun0 up to utun255.
-	for i := 0; i < 256; i++ {
-		if !used[i] {
-			return fmt.Sprintf("utun%d", i), nil
-		}
-	}
-	return "", fmt.Errorf("no unused utun interface found")
-}
-
-func configureDarwin(interfaceName string, ip net.IP, ipNet *net.IPNet, destIp string) error {
-	logger.Info("Configuring darwin interface: %s", interfaceName)
-
-	_, cidr := ipNet.Mask.Size()
-	ipStr := fmt.Sprintf("%s/%d", ip.String(), cidr)
-
-	cmd := exec.Command("ifconfig", interfaceName, ipStr, destIp, "up")
-	// print the command used
-	logger.Info("Running command: %v", cmd)
-
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ifconfig command failed: %v, output: %s", err, out)
-	}
-
-	return nil
-}
-
-func configureLinux(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
-	// Get the interface
-	link, err := netlink.LinkByName(interfaceName)
-	if err != nil {
-		return fmt.Errorf("failed to get interface %s: %v", interfaceName, err)
-	}
-
-	// Create the IP address attributes
-	addr := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   ip,
-			Mask: ipNet.Mask,
-		},
-	}
-
-	// Add the IP address to the interface
-	if err := netlink.AddrAdd(link, addr); err != nil {
-		return fmt.Errorf("failed to add IP address: %v", err)
-	}
-
-	// Bring up the interface
-	if err := netlink.LinkSetUp(link); err != nil {
-		return fmt.Errorf("failed to bring up interface: %v", err)
-	}
-
-	return nil
-}
 
 func main() {
 	var (
@@ -390,6 +297,36 @@ func main() {
 
 		logger.Info("UAPI listener started")
 
+		close(stopHolepunch)
+
+		// Bring up the device
+		err = dev.Up()
+		if err != nil {
+			logger.Error("Failed to bring up WireGuard device: %v", err)
+		}
+
+		// configure the interface
+		err = ConfigureInterface(realInterfaceName, wgData)
+		if err != nil {
+			logger.Error("Failed to configure interface: %v", err)
+		}
+
+		// loop over the sites and call ConfigurePeer for each one
+		for _, site := range wgData.Sites {
+			if httpServer != nil {
+				httpServer.UpdatePeerStatus(site.SiteId, false, 0)
+			}
+			err = ConfigurePeer(dev, site, privateKey, endpoint)
+			if err != nil {
+				logger.Error("Failed to configure peer: %v", err)
+				return
+			}
+
+			DarwinAddRoute(site.ServerIP, "", interfaceName)
+
+			logger.Info("Configured peer %s", site.PublicKey)
+		}
+
 		peerMonitor = peermonitor.NewPeerMonitor(
 			func(siteID int, connected bool, rtt time.Duration) {
 				if httpServer != nil {
@@ -405,33 +342,6 @@ func main() {
 			olm,
 			dev,
 		)
-
-		// loop over the sites and call ConfigurePeer for each one
-		for _, site := range wgData.Sites {
-			if httpServer != nil {
-				httpServer.UpdatePeerStatus(site.SiteId, false, 0)
-			}
-			err = ConfigurePeer(dev, site, privateKey, endpoint)
-			if err != nil {
-				logger.Error("Failed to configure peer: %v", err)
-				return
-			}
-			logger.Info("Configured peer %s", site.PublicKey)
-		}
-
-		// Bring up the device
-		err = dev.Up()
-		if err != nil {
-			logger.Error("Failed to bring up WireGuard device: %v", err)
-		}
-
-		// configure the interface
-		err = ConfigureInterface(realInterfaceName, wgData)
-		if err != nil {
-			logger.Error("Failed to configure interface: %v", err)
-		}
-
-		close(stopHolepunch)
 
 		peerMonitor.Start()
 
@@ -516,6 +426,13 @@ func main() {
 				return
 			}
 
+			// Add route for the new peer
+			err = DarwinAddRoute(siteConfig.ServerIP, "", interfaceName)
+			if err != nil {
+				logger.Error("Failed to add route for new peer: %v", err)
+				return
+			}
+
 			// Add successful
 			logger.Info("Successfully added peer for site %d", addData.SiteId)
 
@@ -564,6 +481,13 @@ func main() {
 			if err := RemovePeer(dev, removeData.SiteId, peerToRemove.PublicKey); err != nil {
 				logger.Error("Failed to remove peer: %v", err)
 				// Send error response if needed
+				return
+			}
+
+			// Remove route for the peer
+			err = DarwinRemoveRoute(peerToRemove.ServerIP)
+			if err != nil {
+				logger.Error("Failed to remove route for peer: %v", err)
 				return
 			}
 
