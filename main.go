@@ -1,5 +1,3 @@
-//go:build !windows
-
 package main
 
 import (
@@ -18,9 +16,7 @@ import (
 	"github.com/fosrl/olm/peermonitor"
 	"github.com/fosrl/olm/websocket"
 
-	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/ipc"
 	"golang.zx2c4.com/wireguard/tun"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -205,7 +201,6 @@ func main() {
 			return
 		}
 
-		// NEED TO DETERMINE AVAILABLE TUN DEVICE HERE
 		tdev, err = func() (tun.Device, error) {
 			tunFdStr := os.Getenv(ENV_WG_TUN_FD)
 
@@ -222,20 +217,7 @@ func main() {
 				return tun.CreateTUN(interfaceName, mtuInt)
 			}
 
-			// construct tun device from supplied fd
-
-			fd, err := strconv.ParseUint(tunFdStr, 10, 32)
-			if err != nil {
-				return nil, err
-			}
-
-			err = unix.SetNonblock(int(fd), true)
-			if err != nil {
-				return nil, err
-			}
-
-			file := os.NewFile(uintptr(fd), "")
-			return tun.CreateTUNFromFile(file, mtuInt)
+			return createTUNFromFD(tunFdStr, mtuInt)
 		}()
 
 		if err != nil {
@@ -249,11 +231,10 @@ func main() {
 		}
 
 		// open UAPI file (or use supplied fd)
-
 		fileUAPI, err := func() (*os.File, error) {
 			uapiFdStr := os.Getenv(ENV_WG_UAPI_FD)
 			if uapiFdStr == "" {
-				return ipc.UAPIOpen(interfaceName)
+				return uapiOpen(interfaceName)
 			}
 
 			// use supplied fd
@@ -278,7 +259,7 @@ func main() {
 
 		errs := make(chan error)
 
-		uapi, err := ipc.UAPIListen(interfaceName, fileUAPI)
+		uapi, err := uapiListen(interfaceName, fileUAPI)
 		if err != nil {
 			logger.Error("Failed to listen on uapi socket: %v", err)
 			os.Exit(1)
