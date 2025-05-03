@@ -319,7 +319,16 @@ func main() {
 				return
 			}
 
-			DarwinAddRoute(site.ServerIP, "", interfaceName)
+			err = DarwinAddRoute(site.ServerIP, "", interfaceName)
+			if err != nil {
+				logger.Error("Failed to add route for peer: %v", err)
+				return
+			}
+			err = WindowsAddRoute(site.ServerIP, "", interfaceName)
+			if err != nil {
+				logger.Error("Failed to add route for peer: %v", err)
+				return
+			}
 
 			logger.Info("Configured peer %s", site.PublicKey)
 		}
@@ -413,6 +422,11 @@ func main() {
 				logger.Error("Failed to add route for new peer: %v", err)
 				return
 			}
+			err = WindowsAddRoute(siteConfig.ServerIP, "", interfaceName)
+			if err != nil {
+				logger.Error("Failed to add route for new peer: %v", err)
+				return
+			}
 
 			// Add successful
 			logger.Info("Successfully added peer for site %d", addData.SiteId)
@@ -467,6 +481,11 @@ func main() {
 
 			// Remove route for the peer
 			err = DarwinRemoveRoute(peerToRemove.ServerIP)
+			if err != nil {
+				logger.Error("Failed to remove route for peer: %v", err)
+				return
+			}
+			err = WindowsRemoveRoute(peerToRemove.ServerIP)
 			if err != nil {
 				logger.Error("Failed to remove route for peer: %v", err)
 				return

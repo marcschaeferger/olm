@@ -600,6 +600,10 @@ func configureWindows(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
 }
 
 func WindowsAddRoute(destination string, gateway string, interfaceName string) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
 	var cmd *exec.Cmd
 
 	// Parse destination to get the IP and subnet
