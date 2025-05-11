@@ -324,11 +324,12 @@ func main() {
 				logger.Error("Failed to add route for peer: %v", err)
 				return
 			}
-			err = WindowsAddRoute(site.ServerIP, "", interfaceName)
-			if err != nil {
-				logger.Error("Failed to add route for peer: %v", err)
-				return
-			}
+			// this causes routing issues on Windows
+			// err = WindowsAddRoute(site.ServerIP, "", interfaceName)
+			// if err != nil {
+			// 	logger.Error("Failed to add route for peer: %v", err)
+			// 	return
+			// }
 
 			logger.Info("Configured peer %s", site.PublicKey)
 		}

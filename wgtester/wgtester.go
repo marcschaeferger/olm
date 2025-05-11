@@ -3,10 +3,11 @@ package wgtester
 import (
 	"context"
 	"encoding/binary"
-	"log"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/fosrl/newt/logger"
 )
 
 const (
@@ -99,6 +100,7 @@ func (c *Client) ensureConnection() error {
 // Returns true if connected, false otherwise
 func (c *Client) TestConnection(ctx context.Context) (bool, time.Duration) {
 	if err := c.ensureConnection(); err != nil {
+		logger.Warn("Failed to ensure connection: %v", err)
 		return false, 0
 	}
 
@@ -117,12 +119,13 @@ func (c *Client) TestConnection(ctx context.Context) (bool, time.Duration) {
 			timestamp := time.Now().UnixNano()
 			binary.BigEndian.PutUint64(packet[5:13], uint64(timestamp))
 
-			// Send the packet
+			logger.Debug("Attempting to send monitor packet to %s", c.serverAddr)
 			_, err := c.conn.Write(packet)
 			if err != nil {
-				log.Printf("Error sending packet: %v", err)
+				logger.Info("Error sending packet: %v", err)
 				continue
 			}
+			logger.Debug("Successfully sent monitor packet")
 
 			// Set read deadline
 			c.conn.SetReadDeadline(time.Now().Add(c.timeout))
@@ -136,7 +139,7 @@ func (c *Client) TestConnection(ctx context.Context) (bool, time.Duration) {
 					time.Sleep(100 * time.Millisecond) // Brief pause between attempts
 					continue
 				}
-				log.Printf("Error reading response: %v", err)
+				logger.Error("Error reading response: %v", err)
 				continue
 			}
 
@@ -180,6 +183,7 @@ func (c *Client) StartMonitor(callback MonitorCallback) error {
 	defer c.monitorLock.Unlock()
 
 	if c.monitorRunning {
+		logger.Info("Monitor already running")
 		return nil // Already running
 	}
 

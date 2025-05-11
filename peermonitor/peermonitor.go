@@ -159,9 +159,14 @@ func (pm *PeerMonitor) Start() {
 	// Start monitoring all peers
 	for siteID, client := range pm.monitors {
 		siteIDCopy := siteID // Create a copy for the closure
-		client.StartMonitor(func(status wgtester.ConnectionStatus) {
+		err := client.StartMonitor(func(status wgtester.ConnectionStatus) {
 			pm.handleConnectionStatusChange(siteIDCopy, status)
 		})
+		if err != nil {
+			logger.Error("Failed to start monitoring peer %d: %v\n", siteID, err)
+			continue
+		}
+		logger.Info("Started monitoring peer %d\n", siteID)
 	}
 }
 
@@ -197,11 +202,11 @@ persistent_keepalive_interval=1`, pm.privateKey, config.PublicKey, config.Server
 
 	err := pm.device.IpcSet(wgConfig)
 	if err != nil {
-		fmt.Printf("Failed to configure WireGuard device: %v\n", err)
+		logger.Error("Failed to configure WireGuard device: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Adjusted peer %d to point to relay!\n", siteID)
+	logger.Info("Adjusted peer %d to point to relay!\n", siteID)
 
 	// Send relay message to the server
 	if pm.wsClient != nil {
