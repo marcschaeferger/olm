@@ -7,7 +7,7 @@ toolchain go1.23.2
 require (
 	github.com/fosrl/newt v0.0.0-20250215225251-76503f3f2cd8
 	golang.org/x/net v0.33.0
-	golang.org/x/sys v0.30.0
+	golang.org/x/sys v0.33.0
 	golang.zx2c4.com/wireguard v0.0.0-20231211153847-12269c276173
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
 )

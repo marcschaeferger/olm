@@ -15,6 +15,7 @@ import (
 	"github.com/fosrl/olm/httpserver"
 	"github.com/fosrl/olm/peermonitor"
 	"github.com/fosrl/olm/websocket"
+	"github.com/fosrl/olm/wgtester"
 
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
@@ -36,6 +37,8 @@ func main() {
 		interfaceName string
 		enableHTTP    bool
 		httpAddr      string
+		testMode      bool   // Add this var for the test flag
+		testTarget    string // Add this var for test target
 	)
 
 	stopHolepunch = make(chan struct{})
@@ -78,6 +81,8 @@ func main() {
 	}
 
 	flag.BoolVar(&enableHTTP, "http", false, "Enable HTTP server")
+	flag.BoolVar(&testMode, "test", false, "Test WireGuard connectivity to a target")
+	flag.StringVar(&testTarget, "test-target", "", "Target server:port for test mode")
 
 	// do a --version check
 	version := flag.Bool("version", false, "Print the version")
@@ -92,6 +97,35 @@ func main() {
 	logger.Init()
 	loggerLevel := parseLogLevel(logLevel)
 	logger.GetLogger().SetLevel(parseLogLevel(logLevel))
+
+	// Handle test mode
+	if testMode {
+		if testTarget == "" {
+			logger.Fatal("Test mode requires -test-target to be set to a server:port")
+		}
+
+		logger.Info("Running in test mode, connecting to %s", testTarget)
+
+		// Create a new tester client
+		tester, err := wgtester.NewClient(testTarget)
+		if err != nil {
+			logger.Fatal("Failed to create tester client: %v", err)
+		}
+		defer tester.Close()
+
+		// Test connection with a 2-second timeout
+		connected, rtt := tester.TestConnectionWithTimeout(2 * time.Second)
+
+		if connected {
+			logger.Info("Connection test successful! RTT: %v", rtt)
+			fmt.Printf("Connection test successful! RTT: %v\n", rtt)
+			os.Exit(0)
+		} else {
+			logger.Error("Connection test failed - no response received")
+			fmt.Println("Connection test failed - no response received")
+			os.Exit(1)
+		}
+	}
 
 	var httpServer *httpserver.HTTPServer
 	if enableHTTP {
@@ -112,7 +146,6 @@ func main() {
 			}
 		}()
 	}
-
 	// wait until we have a client id and secret and endpoint
 	for id == "" || secret == "" || endpoint == "" {
 		logger.Debug("Waiting for client ID, secret, and endpoint...")
@@ -324,7 +357,6 @@ func main() {
 				logger.Error("Failed to add route for peer: %v", err)
 				return
 			}
-			// this causes routing issues on Windows
 			// err = WindowsAddRoute(site.ServerIP, "", interfaceName)
 			// if err != nil {
 			// 	logger.Error("Failed to add route for peer: %v", err)
@@ -423,11 +455,11 @@ func main() {
 				logger.Error("Failed to add route for new peer: %v", err)
 				return
 			}
-			err = WindowsAddRoute(siteConfig.ServerIP, "", interfaceName)
-			if err != nil {
-				logger.Error("Failed to add route for new peer: %v", err)
-				return
-			}
+			// err = WindowsAddRoute(siteConfig.ServerIP, "", interfaceName)
+			// if err != nil {
+			// 	logger.Error("Failed to add route for new peer: %v", err)
+			// 	return
+			// }
 
 			// Add successful
 			logger.Info("Successfully added peer for site %d", addData.SiteId)
