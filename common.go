@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/newt/websocket"
 	"github.com/fosrl/olm/peermonitor"
-	"github.com/fosrl/olm/websocket"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/curve25519"
@@ -596,7 +596,54 @@ func configureWindows(interfaceName string, ip net.IP, ipNet *net.IPNet) error {
 		return fmt.Errorf("netsh enable interface command failed: %v, output: %s", err, out)
 	}
 
+	// delay 2 seconds
+	time.Sleep(8 * time.Second)
+
+	// Wait for the interface to be up and have the correct IP
+	err = waitForInterfaceUp(interfaceName, ip, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("interface did not come up within timeout: %v", err)
+	}
+
 	return nil
+}
+
+// waitForInterfaceUp polls the network interface until it's up or times out
+func waitForInterfaceUp(interfaceName string, expectedIP net.IP, timeout time.Duration) error {
+	logger.Info("Waiting for interface %s to be up with IP %s", interfaceName, expectedIP)
+	deadline := time.Now().Add(timeout)
+	pollInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		// Check if interface exists and is up
+		iface, err := net.InterfaceByName(interfaceName)
+		if err == nil {
+			// Check if interface is up
+			if iface.Flags&net.FlagUp != 0 {
+				// Check if it has the expected IP
+				addrs, err := iface.Addrs()
+				if err == nil {
+					for _, addr := range addrs {
+						ipNet, ok := addr.(*net.IPNet)
+						if ok && ipNet.IP.Equal(expectedIP) {
+							logger.Info("Interface %s is up with correct IP", interfaceName)
+							return nil // Interface is up with correct IP
+						}
+					}
+					logger.Info("Interface %s is up but doesn't have expected IP yet", interfaceName)
+				}
+			} else {
+				logger.Info("Interface %s exists but is not up yet", interfaceName)
+			}
+		} else {
+			logger.Info("Interface %s not found yet: %v", interfaceName, err)
+		}
+
+		// Wait before next check
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("timed out waiting for interface %s to be up with IP %s", interfaceName, expectedIP)
 }
 
 func WindowsAddRoute(destination string, gateway string, interfaceName string) error {

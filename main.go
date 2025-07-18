@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/fosrl/newt/logger"
+	"github.com/fosrl/newt/websocket"
 	"github.com/fosrl/olm/httpserver"
 	"github.com/fosrl/olm/peermonitor"
-	"github.com/fosrl/olm/websocket"
 	"github.com/fosrl/olm/wgtester"
 
 	"golang.zx2c4.com/wireguard/device"
@@ -39,6 +39,8 @@ func main() {
 		httpAddr      string
 		testMode      bool   // Add this var for the test flag
 		testTarget    string // Add this var for test target
+		pingInterval  time.Duration
+		pingTimeout   time.Duration
 	)
 
 	stopHolepunch = make(chan struct{})
@@ -54,6 +56,8 @@ func main() {
 	logLevel = os.Getenv("LOG_LEVEL")
 	interfaceName = os.Getenv("INTERFACE")
 	httpAddr = os.Getenv("HTTP_ADDR")
+	pingIntervalStr := os.Getenv("PING_INTERVAL")
+	pingTimeoutStr := os.Getenv("PING_TIMEOUT")
 
 	if endpoint == "" {
 		flag.StringVar(&endpoint, "endpoint", "", "Endpoint of your Pangolin server")
@@ -78,6 +82,32 @@ func main() {
 	}
 	if httpAddr == "" {
 		flag.StringVar(&httpAddr, "http-addr", ":9452", "HTTP server address (e.g., ':9452')")
+	}
+	if pingIntervalStr == "" {
+		flag.StringVar(&pingIntervalStr, "ping-interval", "3s", "Interval for pinging the server (default 3s)")
+	}
+	if pingTimeoutStr == "" {
+		flag.StringVar(&pingTimeoutStr, "ping-timeout", "5s", "	Timeout for each ping (default 3s)")
+	}
+
+	if pingIntervalStr != "" {
+		pingInterval, err = time.ParseDuration(pingIntervalStr)
+		if err != nil {
+			fmt.Printf("Invalid PING_INTERVAL value: %s, using default 3 seconds\n", pingIntervalStr)
+			pingInterval = 3 * time.Second
+		}
+	} else {
+		pingInterval = 3 * time.Second
+	}
+
+	if pingTimeoutStr != "" {
+		pingTimeout, err = time.ParseDuration(pingTimeoutStr)
+		if err != nil {
+			fmt.Printf("Invalid PING_TIMEOUT value: %s, using default 5 seconds\n", pingTimeoutStr)
+			pingTimeout = 5 * time.Second
+		}
+	} else {
+		pingTimeout = 5 * time.Second
 	}
 
 	flag.BoolVar(&enableHTTP, "http", false, "Enable HTTP server")
@@ -165,9 +195,12 @@ func main() {
 
 	// Create a new olm
 	olm, err := websocket.NewClient(
+		"olm",
 		id,     // CLI arg takes precedence
 		secret, // CLI arg takes precedence
 		endpoint,
+		pingInterval,
+		pingTimeout,
 	)
 	if err != nil {
 		logger.Fatal("Failed to create olm: %v", err)

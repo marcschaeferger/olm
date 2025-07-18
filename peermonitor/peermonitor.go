@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/fosrl/newt/logger"
-	"github.com/fosrl/olm/websocket"
+	"github.com/fosrl/newt/websocket"
 	"github.com/fosrl/olm/wgtester"
 	"golang.zx2c4.com/wireguard/device"
 )
