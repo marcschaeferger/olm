@@ -110,6 +110,12 @@ type RemovePeerData struct {
 	SiteId int `json:"siteId"`
 }
 
+type RelayPeerData struct {
+	SiteId    int    `json:"siteId"`
+	Endpoint  string `json:"endpoint"`
+	PublicKey string `json:"publicKey"`
+}
+
 func (b *fixedPortBind) Open(port uint16) ([]conn.ReceiveFunc, uint16, error) {
 	// Ignore the requested port and use our fixed port
 	return b.Bind.Open(b.port)

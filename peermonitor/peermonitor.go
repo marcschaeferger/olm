@@ -179,12 +179,15 @@ func (pm *PeerMonitor) handleConnectionStatusChange(siteID int, status wgtester.
 
 	// If disconnected, handle failover
 	if !status.Connected {
-		pm.handleFailover(siteID)
+		// Send relay message to the server
+		if pm.wsClient != nil {
+			pm.sendRelay(siteID)
+		}
 	}
 }
 
 // handleFailover handles failover to the relay server when a peer is disconnected
-func (pm *PeerMonitor) handleFailover(siteID int) {
+func (pm *PeerMonitor) HandleFailover(siteID int, relayEndpoint string) {
 	pm.mutex.Lock()
 	config, exists := pm.configs[siteID]
 	pm.mutex.Unlock()
@@ -198,7 +201,7 @@ func (pm *PeerMonitor) handleFailover(siteID int) {
 public_key=%s
 allowed_ip=%s/32
 endpoint=%s:21820
-persistent_keepalive_interval=1`, pm.privateKey, config.PublicKey, config.ServerIP, config.PrimaryRelay)
+persistent_keepalive_interval=1`, pm.privateKey, config.PublicKey, config.ServerIP, relayEndpoint)
 
 	err := pm.device.IpcSet(wgConfig)
 	if err != nil {
@@ -207,11 +210,6 @@ persistent_keepalive_interval=1`, pm.privateKey, config.PublicKey, config.Server
 	}
 
 	logger.Info("Adjusted peer %d to point to relay!\n", siteID)
-
-	// Send relay message to the server
-	if pm.wsClient != nil {
-		pm.sendRelay(siteID)
-	}
 }
 
 // sendRelay sends a relay message to the server

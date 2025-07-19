@@ -220,7 +220,7 @@ func main() {
 	}
 
 	olm.RegisterHandler("olm/wg/holepunch", func(msg websocket.WSMessage) {
-		logger.Info("Received message: %v", msg.Data)
+		logger.Debug("Received message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
@@ -239,7 +239,7 @@ func main() {
 	connectTimes := 0
 	// Register handlers for different message types
 	olm.RegisterHandler("olm/wg/connect", func(msg websocket.WSMessage) {
-		logger.Info("Received message: %v", msg.Data)
+		logger.Debug("Received message: %v", msg.Data)
 
 		if connectTimes > 0 {
 			logger.Info("Already connected. Ignoring new connection request.")
@@ -405,7 +405,7 @@ func main() {
 	})
 
 	olm.RegisterHandler("olm/wg/peer/update", func(msg websocket.WSMessage) {
-		logger.Info("Received update-peer message: %v", msg.Data)
+		logger.Debug("Received update-peer message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
@@ -452,7 +452,7 @@ func main() {
 
 	// Handler for adding a new peer
 	olm.RegisterHandler("olm/wg/peer/add", func(msg websocket.WSMessage) {
-		logger.Info("Received add-peer message: %v", msg.Data)
+		logger.Debug("Received add-peer message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
@@ -506,7 +506,7 @@ func main() {
 
 	// Handler for removing a peer
 	olm.RegisterHandler("olm/wg/peer/remove", func(msg websocket.WSMessage) {
-		logger.Info("Received remove-peer message: %v", msg.Data)
+		logger.Debug("Received remove-peer message: %v", msg.Data)
 
 		jsonData, err := json.Marshal(msg.Data)
 		if err != nil {
@@ -565,6 +565,29 @@ func main() {
 		} else {
 			logger.Error("WireGuard device not initialized")
 		}
+	})
+
+	olm.RegisterHandler("olm/wg/peer/relay", func(msg websocket.WSMessage) {
+		logger.Debug("Received relay-peer message: %v", msg.Data)
+
+		jsonData, err := json.Marshal(msg.Data)
+		if err != nil {
+			logger.Error("Error marshaling data: %v", err)
+			return
+		}
+
+		var removeData RelayPeerData
+		if err := json.Unmarshal(jsonData, &removeData); err != nil {
+			logger.Error("Error unmarshaling remove data: %v", err)
+			return
+		}
+
+		primaryRelay, err := resolveDomain(removeData.Endpoint)
+		if err != nil {
+			logger.Warn("Failed to resolve primary relay endpoint: %v", err)
+		}
+
+		peerMonitor.HandleFailover(removeData.SiteId, primaryRelay)
 	})
 
 	olm.RegisterHandler("olm/terminate", func(msg websocket.WSMessage) {
