@@ -53,6 +53,7 @@ type HolePunchMessage struct {
 
 type HolePunchData struct {
 	ServerPubKey string `json:"serverPubKey"`
+	Endpoint     string `json:"endpoint"`
 }
 
 type EncryptedHolePunchMessage struct {

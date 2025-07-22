@@ -234,6 +234,8 @@ func main() {
 		}
 
 		gerbilServerPubKey = holePunchData.ServerPubKey
+
+		go keepSendingUDPHolePunch(holePunchData.Endpoint, id, sourcePort)
 	})
 
 	connectTimes := 0
@@ -619,8 +621,6 @@ func main() {
 		logger.Fatal("Failed to connect to server: %v", err)
 	}
 	defer olm.Close()
-
-	go keepSendingUDPHolePunch(endpoint, id, sourcePort)
 
 	// Wait for interrupt signal
 	sigCh := make(chan os.Signal, 1)
