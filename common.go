@@ -222,28 +222,10 @@ func resolveDomain(domain string) (string, error) {
 	return ipAddr, nil
 }
 
-func sendUDPHolePunch(serverAddr string, olmID string, sourcePort uint16) error {
-
+func sendUDPHolePunchWithConn(conn *net.UDPConn, remoteAddr *net.UDPAddr, olmID string) error {
 	if gerbilServerPubKey == "" || olmToken == "" {
 		return nil
 	}
-
-	// Bind to specific local port
-	localAddr := &net.UDPAddr{
-		Port: int(sourcePort),
-		IP:   net.IPv4zero,
-	}
-
-	remoteAddr, err := net.ResolveUDPAddr("udp", serverAddr)
-	if err != nil {
-		return fmt.Errorf("failed to resolve UDP address: %v", err)
-	}
-
-	conn, err := net.ListenUDP("udp", localAddr)
-	if err != nil {
-		return fmt.Errorf("failed to bind UDP socket: %v", err)
-	}
-	defer conn.Close()
 
 	payload := struct {
 		OlmID string `json:"olmId"`
@@ -275,7 +257,7 @@ func sendUDPHolePunch(serverAddr string, olmID string, sourcePort uint16) error 
 		return fmt.Errorf("failed to send UDP packet: %v", err)
 	}
 
-	logger.Debug("Sent UDP hole punch to %s: %s", serverAddr, string(jsonData))
+	logger.Debug("Sent UDP hole punch to %s: %s", remoteAddr.String(), string(jsonData))
 
 	return nil
 }
@@ -340,8 +322,29 @@ func keepSendingUDPHolePunch(endpoint string, olmID string, sourcePort uint16) {
 		return
 	}
 
+	serverAddr := host + ":21820"
+
+	// Create the UDP connection once and reuse it
+	localAddr := &net.UDPAddr{
+		Port: int(sourcePort),
+		IP:   net.IPv4zero,
+	}
+
+	remoteAddr, err := net.ResolveUDPAddr("udp", serverAddr)
+	if err != nil {
+		logger.Error("Failed to resolve UDP address: %v", err)
+		return
+	}
+
+	conn, err := net.ListenUDP("udp", localAddr)
+	if err != nil {
+		logger.Error("Failed to bind UDP socket: %v", err)
+		return
+	}
+	defer conn.Close()
+
 	// Execute once immediately before starting the loop
-	if err := sendUDPHolePunch(host+":21820", olmID, sourcePort); err != nil {
+	if err := sendUDPHolePunchWithConn(conn, remoteAddr, olmID); err != nil {
 		logger.Error("Failed to send UDP hole punch: %v", err)
 	}
 
@@ -354,7 +357,7 @@ func keepSendingUDPHolePunch(endpoint string, olmID string, sourcePort uint16) {
 			logger.Info("Stopping UDP holepunch")
 			return
 		case <-ticker.C:
-			if err := sendUDPHolePunch(host+":21820", olmID, sourcePort); err != nil {
+			if err := sendUDPHolePunchWithConn(conn, remoteAddr, olmID); err != nil {
 				logger.Error("Failed to send UDP hole punch: %v", err)
 			}
 		}
