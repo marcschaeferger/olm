@@ -921,7 +921,7 @@ func (o *Olm) handleAuthError(statusCode int, message string) {
 	o.apiServer.SetGatewayStatus(false, 0, nil)
 	network.ClearNetworkSettings()
 
-	o.Close()
+	o.closeTunnel()
 	o.markTunnelStopped()
 
 	if o.olmConfig.OnAuthError != nil {
@@ -948,19 +948,29 @@ func (o *Olm) markTunnelStopped() {
 
 // failStart tears down a StartTunnel that returned early. By then the DNS
 // monitor is already polling on olmCtx and, depending on the stage, the
-// websocket client, shared bind and hole punch manager exist too; only Close
-// releases them, so a retried start would otherwise leak them every time.
-// The log file stays open: unlike StopTunnel at shutdown, the process keeps
-// running for a retry and the logger still writes to that file.
+// websocket client, shared bind and hole punch manager exist too; only
+// closeTunnel releases them, so a retried start would otherwise leak them
+// every time.
 func (o *Olm) failStart() {
-	logFile := o.logFile
-	o.logFile = nil
-	o.Close()
-	o.logFile = logFile
+	o.closeTunnel()
 	o.markTunnelStopped()
 }
 
+// Close shuts olm down for process exit: it tears down the tunnel and then
+// closes the log file opened by Init.
 func (o *Olm) Close() {
+	o.closeTunnel()
+
+	if o.logFile != nil {
+		_ = o.logFile.Close()
+		o.logFile = nil
+	}
+}
+
+// closeTunnel tears down the tunnel and its resources. It leaves the log file
+// open because the process keeps running (and logging) after a disconnect,
+// org switch, server terminate or auth error.
+func (o *Olm) closeTunnel() {
 	// Stop registration first to prevent it from trying to use closed websocket
 	if o.stopRegister != nil {
 		logger.Debug("Stopping registration interval")
@@ -1065,11 +1075,6 @@ func (o *Olm) Close() {
 		o.uapiListener = nil
 	}
 
-	if o.logFile != nil {
-		_ = o.logFile.Close()
-		o.logFile = nil
-	}
-
 	// Stop DNS proxy first - it uses the middleDev for packet filtering
 	if o.dnsProxy != nil {
 		logger.Debug("Stopping DNS proxy")
@@ -1107,6 +1112,10 @@ func (o *Olm) Close() {
 		logger.Debug("Closing WireGuard device")
 		o.dev.Close()
 		o.dev = nil
+	} else if o.sharedBind != nil {
+		// No WireGuard device was ever created (e.g. stopped during
+		// registration), so release the reference reserved for it here.
+		_ = o.sharedBind.Release()
 	}
 
 	// Release the hole punch reference to the shared bind (WireGuard already
@@ -1146,8 +1155,8 @@ func (o *Olm) StopTunnel() error {
 	o.tunnelWg.Wait()
 	logger.Debug("Tunnel goroutine finished")
 
-	// Close() will handle sending disconnect message and closing websocket
-	o.Close()
+	// closeTunnel() will handle sending disconnect message and closing websocket
+	o.closeTunnel()
 
 	// Update API server status
 	o.apiServer.SetConnectionStatus(false)

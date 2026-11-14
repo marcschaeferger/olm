@@ -154,7 +154,78 @@ func TestFailStartReleasesStartResources(t *testing.T) {
 	if o.sharedBind != nil {
 		t.Error("sharedBind was not released after a failed start")
 	}
-	if got := sharedBind.GetRefCount(); got != refsBefore-1 {
-		t.Errorf("shared bind refcount = %d after a failed start, want %d (hole punch reference released)", got, refsBefore-1)
+	// No WireGuard device was created, so nothing else releases the
+	// reference reserved for it: both references must go and the UDP socket
+	// must close, or the next start leaks another port.
+	if got := sharedBind.GetRefCount(); got != 0 {
+		t.Errorf("shared bind refcount = %d after a failed start (was %d), want 0", got, refsBefore)
+	}
+	if !sharedBind.IsClosed() {
+		t.Error("shared bind UDP socket still open after a failed start")
+	}
+}
+
+// installTempLogFile gives o a log file the way Init does for --log-file.
+func installTempLogFile(t *testing.T, o *Olm) *os.File {
+	t.Helper()
+
+	logFile, err := os.CreateTemp(t.TempDir(), "olm-*.log")
+	if err != nil {
+		t.Fatalf("create log file: %v", err)
+	}
+	t.Cleanup(func() { _ = logFile.Close() })
+	o.logFile = logFile
+	return logFile
+}
+
+// TestTunnelTeardownKeepsLogFileOpen checks that ending only the tunnel
+// (disconnect, org switch, server terminate, auth error) leaves the
+// process-lifetime log file open, since the logger keeps writing to it.
+func TestTunnelTeardownKeepsLogFileOpen(t *testing.T) {
+	teardowns := map[string]func(o *Olm){
+		"StopTunnel": func(o *Olm) {
+			if err := o.StopTunnel(); err != nil {
+				t.Fatalf("StopTunnel: %v", err)
+			}
+		},
+		"handleTerminate": func(o *Olm) {
+			o.handleTerminate(websocket.WSMessage{
+				Type: "olm/terminate",
+				Data: map[string]any{"code": "TERMINATED_BY_ADMIN", "message": "terminated"},
+			})
+		},
+		"handleAuthError": func(o *Olm) { o.handleAuthError(401, "unauthorized") },
+	}
+
+	for name, teardown := range teardowns {
+		t.Run(name, func(t *testing.T) {
+			o, _ := newRunningTunnelOlm(t)
+			logFile := installTempLogFile(t, o)
+
+			teardown(o)
+
+			if o.logFile != logFile {
+				t.Error("tunnel teardown dropped the log file; Close at shutdown could no longer close it")
+			}
+			if _, err := logFile.WriteString("still writable\n"); err != nil {
+				t.Errorf("log file was closed by a tunnel teardown, later log output is lost: %v", err)
+			}
+		})
+	}
+}
+
+// TestCloseClosesLogFile checks that process shutdown still closes the log
+// file.
+func TestCloseClosesLogFile(t *testing.T) {
+	o, _ := newRunningTunnelOlm(t)
+	logFile := installTempLogFile(t, o)
+
+	o.Close()
+
+	if o.logFile != nil {
+		t.Error("Close kept the log file")
+	}
+	if _, err := logFile.WriteString("after shutdown\n"); err == nil {
+		t.Error("log file is still open after Close")
 	}
 }
