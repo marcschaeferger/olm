@@ -1033,7 +1033,7 @@ func (pm *PeerManager) AddPeer(siteConfig SiteConfig) error {
 	wgConfig := siteConfig
 	wgConfig.AllowedIps = ownedIPs
 
-	if err := ConfigurePeer(pm.device, wgConfig, pm.privateKey, pm.peerMonitor.IsPeerRelayed(siteConfig.SiteId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
+	if err := ConfigurePeer(pm.device, wgConfig, pm.privateKey, pm.isPeerRelayedLocked(siteConfig.SiteId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
 		return err
 	}
 
@@ -1047,11 +1047,13 @@ func (pm *PeerManager) AddPeer(siteConfig SiteConfig) error {
 	monitorAddress := strings.Split(siteConfig.ServerIP, "/")[0]
 	monitorPeer := net.JoinHostPort(monitorAddress, strconv.Itoa(int(siteConfig.ServerPort+1))) // +1 for the monitor port
 
-	err := pm.peerMonitor.AddPeer(siteConfig.SiteId, monitorPeer, siteConfig.Endpoint, siteConfig.LocalEndpoints) // always use the real site endpoint for hole punch monitoring
-	if err != nil {
-		logger.Warn("Failed to setup monitoring for site %d: %v", siteConfig.SiteId, err)
-	} else {
-		logger.Info("Started monitoring for site %d at %s", siteConfig.SiteId, monitorPeer)
+	if pm.peerMonitor != nil {
+		err := pm.peerMonitor.AddPeer(siteConfig.SiteId, monitorPeer, siteConfig.Endpoint, siteConfig.LocalEndpoints) // always use the real site endpoint for hole punch monitoring
+		if err != nil {
+			logger.Warn("Failed to setup monitoring for site %d: %v", siteConfig.SiteId, err)
+		} else {
+			logger.Info("Started monitoring for site %d at %s", siteConfig.SiteId, monitorPeer)
+		}
 	}
 
 	pm.peers[siteConfig.SiteId] = siteConfig
@@ -1187,15 +1189,17 @@ func (pm *PeerManager) RemovePeer(siteId int) error {
 			ownedIPs := pm.getOwnedAllowedIPs(promotedPeerId)
 			wgConfig := promotedPeer
 			wgConfig.AllowedIps = ownedIPs
-			if err := ConfigurePeer(pm.device, wgConfig, pm.privateKey, pm.peerMonitor.IsPeerRelayed(promotedPeerId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
+			if err := ConfigurePeer(pm.device, wgConfig, pm.privateKey, pm.isPeerRelayedLocked(promotedPeerId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
 				logger.Error("Failed to update promoted peer %d: %v", promotedPeerId, err)
 			}
 		}
 	}
 
 	// Stop monitoring this peer
-	pm.peerMonitor.RemovePeer(siteId)
-	logger.Info("Stopped monitoring for site %d", siteId)
+	if pm.peerMonitor != nil {
+		pm.peerMonitor.RemovePeer(siteId)
+		logger.Info("Stopped monitoring for site %d", siteId)
+	}
 
 	pm.APIServer.RemovePeerStatus(siteId)
 
@@ -1313,7 +1317,7 @@ func (pm *PeerManager) UpdatePeer(siteConfig SiteConfig) error {
 	wgConfig := siteConfig
 	wgConfig.AllowedIps = ownedIPs
 
-	if err := ConfigurePeer(pm.device, wgConfig, pm.privateKey, pm.peerMonitor.IsPeerRelayed(siteConfig.SiteId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
+	if err := ConfigurePeer(pm.device, wgConfig, pm.privateKey, pm.isPeerRelayedLocked(siteConfig.SiteId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
 		return err
 	}
 
@@ -1323,7 +1327,7 @@ func (pm *PeerManager) UpdatePeer(siteConfig SiteConfig) error {
 			promotedOwnedIPs := pm.getOwnedAllowedIPs(promotedPeerId)
 			promotedWgConfig := promotedPeer
 			promotedWgConfig.AllowedIps = promotedOwnedIPs
-			if err := ConfigurePeer(pm.device, promotedWgConfig, pm.privateKey, pm.peerMonitor.IsPeerRelayed(promotedPeerId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
+			if err := ConfigurePeer(pm.device, promotedWgConfig, pm.privateKey, pm.isPeerRelayedLocked(promotedPeerId), pm.PersistentKeepalive, pm.publicDNS); err != nil {
 				logger.Error("Failed to update promoted peer %d: %v", promotedPeerId, err)
 			}
 		}
@@ -1385,12 +1389,14 @@ func (pm *PeerManager) UpdatePeer(siteConfig SiteConfig) error {
 		}
 	}
 
-	pm.peerMonitor.UpdateHolepunchEndpoint(siteConfig.SiteId, siteConfig.Endpoint)
-	pm.peerMonitor.UpdateLocalEndpoints(siteConfig.SiteId, siteConfig.LocalEndpoints)
+	if pm.peerMonitor != nil {
+		pm.peerMonitor.UpdateHolepunchEndpoint(siteConfig.SiteId, siteConfig.Endpoint)
+		pm.peerMonitor.UpdateLocalEndpoints(siteConfig.SiteId, siteConfig.LocalEndpoints)
 
-	monitorAddress := strings.Split(siteConfig.ServerIP, "/")[0]
-	monitorPeer := net.JoinHostPort(monitorAddress, strconv.Itoa(int(siteConfig.ServerPort+1))) // +1 for the monitor port
-	pm.peerMonitor.UpdatePeerEndpoint(siteConfig.SiteId, monitorPeer)                           // +1 for monitor port
+		monitorAddress := strings.Split(siteConfig.ServerIP, "/")[0]
+		monitorPeer := net.JoinHostPort(monitorAddress, strconv.Itoa(int(siteConfig.ServerPort+1))) // +1 for the monitor port
+		pm.peerMonitor.UpdatePeerEndpoint(siteConfig.SiteId, monitorPeer)                           // +1 for monitor port
+	}
 
 	if pm.gatewayActive {
 		newIP, haveNewIP := pm.resolveActiveEndpointIPLocked(siteConfig)
@@ -1778,6 +1784,7 @@ func (pm *PeerManager) RelayPeer(siteId int, relayEndpoint string, relayPort uin
 		peer.RelayEndpoint = relayEndpoint
 		pm.peers[siteId] = peer
 	}
+	peerMonitor := pm.peerMonitor
 	pm.mu.Unlock()
 
 	if !exists {
@@ -1807,8 +1814,8 @@ endpoint=%s:%d`, util.FixKey(peer.PublicKey), formattedEndpoint, relayPort)
 	}
 
 	// Mark the peer as relayed in the monitor
-	if pm.peerMonitor != nil {
-		pm.peerMonitor.MarkPeerRelayed(siteId, true)
+	if peerMonitor != nil {
+		peerMonitor.MarkPeerRelayed(siteId, true)
 	}
 
 	logger.Info("Adjusted peer %d to point to relay!\n", siteId)
@@ -1918,10 +1925,11 @@ func (pm *PeerManager) MarkPeerRelayed(siteID int, relayed bool) {
 			pm.peers[siteID] = peer
 		}
 	}
+	peerMonitor := pm.peerMonitor
 	pm.mu.Unlock()
 
-	if pm.peerMonitor != nil {
-		pm.peerMonitor.MarkPeerRelayed(siteID, relayed)
+	if peerMonitor != nil {
+		peerMonitor.MarkPeerRelayed(siteID, relayed)
 	}
 }
 
@@ -1951,6 +1959,7 @@ func (pm *PeerManager) UnRelayPeer(siteId int, endpoint string) error {
 		peer.Endpoint = endpoint
 		pm.peers[siteId] = peer
 	}
+	peerMonitor := pm.peerMonitor
 	pm.mu.Unlock()
 
 	if !exists {
@@ -1970,8 +1979,8 @@ endpoint=%s`, util.FixKey(peer.PublicKey), endpoint)
 	}
 
 	// Mark as not relayed in monitor
-	if pm.peerMonitor != nil {
-		pm.peerMonitor.MarkPeerRelayed(siteId, false)
+	if peerMonitor != nil {
+		peerMonitor.MarkPeerRelayed(siteId, false)
 	}
 
 	logger.Info("Switched peer %d back to direct connection at %s", siteId, endpoint)
@@ -2068,6 +2077,16 @@ func isBetterConnection(aConn bool, aRelay bool, aRTT time.Duration,
 		return true // current has no RTT data, prefer known
 	}
 	return aRTT < bRTT
+}
+
+// isPeerRelayedLocked reports whether the peer monitor considers siteId
+// relayed, treating a released monitor (after Close) as not relayed.
+// Must be called with pm.mu held.
+func (pm *PeerManager) isPeerRelayedLocked(siteId int) bool {
+	if pm.peerMonitor == nil {
+		return false
+	}
+	return pm.peerMonitor.IsPeerRelayed(siteId)
 }
 
 // selectBestOwner returns the siteId of the best site to own the given IP,
@@ -2179,6 +2198,12 @@ func (pm *PeerManager) transferOwnership(cidr string, fromSiteId int, toSiteId i
 func (pm *PeerManager) optimizeRoutes() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
+
+	// Close() may have released the monitor while this run waited for the
+	// lock; without it there is no connection quality to optimize on.
+	if pm.peerMonitor == nil {
+		return
+	}
 
 	for cidr, claims := range pm.allowedIPClaims {
 		if len(claims) <= 1 {
