@@ -2,6 +2,7 @@ package device
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/netip"
 	"os"
@@ -193,6 +194,17 @@ func (d *MiddleDevice) pump(dev *closeAwareDevice) {
 		}
 
 		n, err := dev.Read(bufs, sizes, defaultOffset)
+
+		// ErrTooManySegments is transient: the first n packets are valid and
+		// the device remains usable, so deliver them and keep reading
+		// (wireguard-go's own TUN reader treats it the same way).
+		if errors.Is(err, tun.ErrTooManySegments) {
+			logger.Debug("MiddleDevice: dropped some packets from multi-segment read: %v", err)
+			err = nil
+			if n <= 0 {
+				continue
+			}
+		}
 
 		// Check if device was closed during read
 		if dev.IsClosed() {
