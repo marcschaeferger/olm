@@ -63,7 +63,6 @@ func NewSystemdResolvedDNSConfigurator(ifaceName string) (*SystemdResolvedDNSCon
 	if err != nil {
 		return nil, fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(systemdResolvedDest, systemdDbusObjectNode)
 
@@ -121,7 +120,6 @@ func (s *SystemdResolvedDNSConfigurator) RestoreDNS() error {
 	if err != nil {
 		return fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(systemdResolvedDest, s.dbusLinkObject)
 
@@ -186,7 +184,6 @@ func (s *SystemdResolvedDNSConfigurator) applyDNSServers(servers []netip.Addr) e
 	if err != nil {
 		return fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(systemdResolvedDest, s.dbusLinkObject)
 
@@ -242,7 +239,6 @@ func (s *SystemdResolvedDNSConfigurator) callLinkMethod(method string, value any
 	if err != nil {
 		return fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(systemdResolvedDest, s.dbusLinkObject)
 
@@ -268,7 +264,6 @@ func (s *SystemdResolvedDNSConfigurator) flushDNSCache() error {
 	if err != nil {
 		return fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(systemdResolvedDest, systemdDbusObjectNode)
 
@@ -288,7 +283,6 @@ func IsSystemdResolvedAvailable() bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
 
 	obj := conn.Object(systemdResolvedDest, systemdDbusObjectNode)
 

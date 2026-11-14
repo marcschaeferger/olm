@@ -214,7 +214,6 @@ func (n *NetworkManagerDNSConfigurator) reloadNetworkManager() error {
 	if err != nil {
 		return fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(networkManagerDest, networkManagerDbusObjectNode)
 
@@ -237,7 +236,6 @@ func IsNetworkManagerAvailable() bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
 
 	obj := conn.Object(networkManagerDest, networkManagerDbusObjectNode)
 
@@ -259,7 +257,6 @@ func IsNetworkManagerDNSModeSupported() bool {
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
 
 	obj := conn.Object(networkManagerDest, networkManagerDbusDNSManagerObjectNode)
 
@@ -301,7 +298,6 @@ func GetNetworkManagerDNSMode() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(networkManagerDest, networkManagerDbusDNSManagerObjectNode)
 
@@ -351,7 +347,6 @@ func GetNetworkManagerNameservers() ([]netip.Addr, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	nm := conn.Object(networkManagerDest, networkManagerDbusObjectNode)
 
@@ -538,7 +533,6 @@ func GetNetworkManagerVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("connect to system bus: %w", err)
 	}
-	defer conn.Close()
 
 	obj := conn.Object(networkManagerDest, networkManagerDbusObjectNode)
 
@@ -578,7 +572,6 @@ func CleanupStaleNetworkManagerDNS() error {
 		if err != nil {
 			return fmt.Errorf("connect to system bus for reload: %w", err)
 		}
-		defer conn.Close()
 
 		obj := conn.Object(networkManagerDest, networkManagerDbusObjectNode)
 
