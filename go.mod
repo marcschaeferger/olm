@@ -2,6 +2,8 @@ module github.com/fosrl/olm
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/fosrl/newt v1.19.0
