@@ -154,8 +154,14 @@ func TestFailStartReleasesStartResources(t *testing.T) {
 	if o.sharedBind != nil {
 		t.Error("sharedBind was not released after a failed start")
 	}
-	if got := sharedBind.GetRefCount(); got != refsBefore-1 {
-		t.Errorf("shared bind refcount = %d after a failed start, want %d (hole punch reference released)", got, refsBefore-1)
+	// No WireGuard device was created, so nothing else releases the
+	// reference reserved for it: both references must go and the UDP socket
+	// must close, or the next start leaks another port.
+	if got := sharedBind.GetRefCount(); got != 0 {
+		t.Errorf("shared bind refcount = %d after a failed start (was %d), want 0", got, refsBefore)
+	}
+	if !sharedBind.IsClosed() {
+		t.Error("shared bind UDP socket still open after a failed start")
 	}
 }
 

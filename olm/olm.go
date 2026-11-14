@@ -1112,6 +1112,10 @@ func (o *Olm) closeTunnel() {
 		logger.Debug("Closing WireGuard device")
 		o.dev.Close()
 		o.dev = nil
+	} else if o.sharedBind != nil {
+		// No WireGuard device was ever created (e.g. stopped during
+		// registration), so release the reference reserved for it here.
+		_ = o.sharedBind.Release()
 	}
 
 	// Release the hole punch reference to the shared bind (WireGuard already
