@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -539,28 +540,7 @@ func (s *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.statusMu.RLock()
-
-	resp := StatusResponse{
-		Connected:       s.isConnected,
-		Registered:      s.isRegistered,
-		Terminated:      s.isTerminated,
-		OlmError:        s.olmError,
-		Version:         s.version,
-		Agent:           s.agent,
-		OrgID:           s.orgID,
-		PeerStatuses:    s.peerStatuses,
-		NetworkSettings: network.GetSettings(),
-		ExitNodeStatus:  s.exitNodeStatus,
-		GatewayActive:   s.gatewayActive,
-		GatewaySiteIds:  s.gatewaySiteIds,
-
-		GatewaySiteResourceId: s.gatewaySiteResourceId,
-	}
-
-	s.statusMu.RUnlock()
-
-	data, err := json.Marshal(resp)
+	data, err := json.Marshal(s.GetStatus())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -712,20 +692,44 @@ func (s *API) handleMetadataChange(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GetStatus returns a snapshot of the current status. The peer map, peer
+// entries and other reference fields are copied under the lock so the result
+// can be marshalled or inspected while the status keeps being updated.
 func (s *API) GetStatus() StatusResponse {
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+
+	peerStatuses := make(map[int]*PeerStatus, len(s.peerStatuses))
+	for id, status := range s.peerStatuses {
+		peerCopy := *status
+		peerStatuses[id] = &peerCopy
+	}
+
+	var olmError *OlmError
+	if s.olmError != nil {
+		errCopy := *s.olmError
+		olmError = &errCopy
+	}
+
+	var exitNodeStatus *ExitNodeStatus
+	if s.exitNodeStatus != nil {
+		exitCopy := *s.exitNodeStatus
+		exitNodeStatus = &exitCopy
+	}
+
 	return StatusResponse{
 		Connected:       s.isConnected,
 		Registered:      s.isRegistered,
 		Terminated:      s.isTerminated,
-		OlmError:        s.olmError,
+		OlmError:        olmError,
 		Version:         s.version,
 		Agent:           s.agent,
 		OrgID:           s.orgID,
-		PeerStatuses:    s.peerStatuses,
+		PeerStatuses:    peerStatuses,
 		NetworkSettings: network.GetSettings(),
-		ExitNodeStatus:  s.exitNodeStatus,
+		ExitNodeStatus:  exitNodeStatus,
 		GatewayActive:   s.gatewayActive,
-		GatewaySiteIds:  s.gatewaySiteIds,
+		GatewaySiteIds:  slices.Clone(s.gatewaySiteIds),
 
 		GatewaySiteResourceId: s.gatewaySiteResourceId,
 	}
