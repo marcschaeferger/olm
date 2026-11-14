@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,10 @@ type DNSProxy struct {
 	// connected yet, giving the caller a chance to initiate a JIT connection.
 	// It is invoked asynchronously so it never blocks DNS resolution.
 	jitHandler func(siteId int)
+
+	// upstreamMu guards upstreamDNS, tunnelDNS and jitHandler, which can be
+	// changed at runtime by the setters while queries are being handled.
+	upstreamMu sync.RWMutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -435,17 +440,19 @@ func (p *DNSProxy) handleDNSQuery(udpConn *gonet.UDPConn, queryData []byte, clie
 
 	// If a local A/AAAA record was found, notify the JIT handler so that the owning
 	// site can be connected on-demand if it is not yet active.
-	if response != nil && p.jitHandler != nil &&
+	p.upstreamMu.RLock()
+	handler := p.jitHandler
+	p.upstreamMu.RUnlock()
+	if response != nil && handler != nil &&
 		(question.Qtype == dns.TypeA || question.Qtype == dns.TypeAAAA) {
 		if siteId, ok := p.recordStore.GetSiteIdForDomain(question.Name); ok && siteId != 0 {
-			handler := p.jitHandler
 			go handler(siteId)
 		}
 	}
 
 	// If no local records, forward to upstream
 	if response == nil {
-		logger.Debug("No local record for %s, forwarding upstream to %v", question.Name, p.upstreamDNS)
+		logger.Debug("No local record for %s, forwarding upstream", question.Name)
 		response = p.forwardToUpstream(msg)
 	}
 
@@ -622,12 +629,21 @@ func (p *DNSProxy) SetLocalDNS(servers []string) {
 
 // forwardToUpstream forwards a DNS query to upstream DNS servers
 func (p *DNSProxy) forwardToUpstream(query *dns.Msg) *dns.Msg {
+	// Snapshot the runtime-configurable settings once so the whole query uses
+	// a consistent view even if they are changed concurrently.
+	p.upstreamMu.RLock()
+	servers := p.upstreamDNS
+	tunnel := p.tunnelDNS
+	p.upstreamMu.RUnlock()
+
+	logger.Debug("Forwarding query upstream to %v", servers)
+
 	// Try primary DNS server
-	response, err := p.queryUpstream(p.upstreamDNS[0], query, 2*time.Second)
-	if err != nil && len(p.upstreamDNS) > 1 {
+	response, err := p.queryUpstream(servers[0], tunnel, query, 2*time.Second)
+	if err != nil && len(servers) > 1 {
 		// Try secondary DNS server
 		logger.Debug("Primary DNS failed, trying secondary: %v", err)
-		response, err = p.queryUpstream(p.upstreamDNS[1], query, 2*time.Second)
+		response, err = p.queryUpstream(servers[1], tunnel, query, 2*time.Second)
 		if err != nil {
 			logger.Error("Both DNS servers failed: %v", err)
 			return nil
@@ -637,8 +653,8 @@ func (p *DNSProxy) forwardToUpstream(query *dns.Msg) *dns.Msg {
 }
 
 // queryUpstream sends a DNS query to upstream server
-func (p *DNSProxy) queryUpstream(server string, query *dns.Msg, timeout time.Duration) (*dns.Msg, error) {
-	if p.tunnelDNS {
+func (p *DNSProxy) queryUpstream(server string, tunnel bool, query *dns.Msg, timeout time.Duration) (*dns.Msg, error) {
+	if tunnel {
 		return p.queryUpstreamTunnel(server, query, timeout)
 	}
 	return p.queryUpstreamDirect(server, query, timeout)
@@ -861,6 +877,8 @@ func (p *DNSProxy) runPacketSender() {
 // The handler is called in its own goroutine so it must be safe to call concurrently.
 // Pass nil to disable JIT notifications.
 func (p *DNSProxy) SetJITHandler(handler func(siteId int)) {
+	p.upstreamMu.Lock()
+	defer p.upstreamMu.Unlock()
 	p.jitHandler = handler
 }
 
@@ -871,6 +889,11 @@ func (p *DNSProxy) SetUpstreamDNS(servers []string) {
 	if len(servers) == 0 {
 		return
 	}
+	// Store a copy so later changes to the caller's slice can't race with
+	// in-flight queries that hold a snapshot of it.
+	servers = slices.Clone(servers)
+	p.upstreamMu.Lock()
+	defer p.upstreamMu.Unlock()
 	p.upstreamDNS = servers
 }
 
@@ -882,6 +905,10 @@ func (p *DNSProxy) SetUpstreamDNS(servers []string) {
 // packet-forwarding goroutine if they weren't already running - NewDNSProxy
 // only does that eagerly when tunnelDns is true from the start.
 func (p *DNSProxy) SetTunnelDNS(tunnelDNS bool) {
+	// Holding the lock across the lazy netstack init also publishes
+	// tunnelStack to queries before they can observe tunnelDNS == true.
+	p.upstreamMu.Lock()
+	defer p.upstreamMu.Unlock()
 	if tunnelDNS && p.tunnelStack == nil {
 		if !p.tunnelIP.IsValid() {
 			logger.Warn("Cannot enable tunnel DNS: tunnel IP not set")
