@@ -82,6 +82,10 @@ func NewDNSProxy(middleDevice *device.MiddleDevice, mtu int, utilitySubnet strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to pick DNS proxy IP from subnet: %v", err)
 	}
+	// The proxy netstack below only supports IPv4; As4() would panic otherwise.
+	if !proxyIP.Unmap().Is4() {
+		return nil, fmt.Errorf("utility subnet %s is not an IPv4 subnet, only IPv4 is supported", utilitySubnet)
+	}
 
 	if len(upstreamDns) == 0 {
 		return nil, fmt.Errorf("at least one upstream DNS server must be specified")
@@ -162,6 +166,11 @@ func NewDNSProxy(middleDevice *device.MiddleDevice, mtu int, utilitySubnet strin
 
 // initTunnelNetstack creates a separate netstack for outbound DNS queries through the tunnel
 func (p *DNSProxy) initTunnelNetstack() error {
+	// The tunnel netstack only supports IPv4; As4() would panic otherwise.
+	if !p.tunnelIP.Unmap().Is4() {
+		return fmt.Errorf("tunnel IP %s is not an IPv4 address, only IPv4 is supported", p.tunnelIP)
+	}
+
 	// Create gvisor netstack for outbound tunnel queries
 	stackOpts := stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},

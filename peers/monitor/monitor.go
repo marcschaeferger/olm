@@ -1255,6 +1255,10 @@ func (pm *PeerMonitor) initNetstack() error {
 	if err != nil {
 		return fmt.Errorf("invalid local IP: %v", err)
 	}
+	// The netstack below only supports IPv4; As4() would panic otherwise.
+	if !addr.Unmap().Is4() {
+		return fmt.Errorf("local IP %s is not an IPv4 address, only IPv4 is supported", pm.localIP)
+	}
 
 	// Create gvisor netstack
 	stackOpts := stack.Options{
@@ -1445,6 +1449,15 @@ func (pm *PeerMonitor) dial(network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The netstack only has an IPv4 address and route, so both ends must be
+	// IPv4; As4() and the [4]byte conversion below would panic otherwise.
+	if !localIP.Unmap().Is4() {
+		return nil, fmt.Errorf("local IP %s is not an IPv4 address, only IPv4 is supported", pm.localIP)
+	}
+	raddrIP := raddr.IP.To4()
+	if raddrIP == nil {
+		return nil, fmt.Errorf("remote address %s is not an IPv4 address, only IPv4 is supported", addr)
+	}
 	ipBytes := localIP.As4()
 
 	// Create UDP connection
@@ -1457,7 +1470,7 @@ func (pm *PeerMonitor) dial(network, addr string) (net.Conn, error) {
 
 	raddrTcpip := &tcpip.FullAddress{
 		NIC:  1,
-		Addr: tcpip.AddrFrom4([4]byte(raddr.IP.To4())),
+		Addr: tcpip.AddrFrom4([4]byte(raddrIP)),
 		Port: uint16(raddr.Port),
 	}
 
