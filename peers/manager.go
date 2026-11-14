@@ -86,7 +86,7 @@ type PeerManager struct {
 	// when disableRoutesAndAliasesOnExitNode && (exitNodeActive ||
 	// gatewayActive) - see exitNodeOrGatewayActiveLocked. It gates
 	// addRoutes/removeRoutes/addServerRoute/removeServerRoute/addDNSRecord/
-	// removeDNSRecord/removeDNSRecordForSite below. Kept as its own field
+	// removeDNSRecordForSite below. Kept as its own field
 	// (rather than recomputed each time) so suppressResourceRoutesLocked/
 	// restoreResourceRoutesLocked can tell whether a transition actually
 	// occurred.
@@ -806,7 +806,7 @@ func (pm *PeerManager) removeServerRoute(serverIP string) error {
 	return network.RemoveRouteForServerIPWithSource(normalizeServerRouteDestination(serverIP), pm.interfaceName, pm.localIP)
 }
 
-// addDNSRecord/removeDNSRecord/removeDNSRecordForSite tolerate a nil proxy
+// addDNSRecord/removeDNSRecordForSite tolerate a nil proxy
 // (defensively - the proxy is now always created, see olm's handleConnect)
 // and are a no-op while resource routes/aliases are suppressed, same as the
 // route helpers above.
@@ -815,13 +815,6 @@ func (pm *PeerManager) addDNSRecord(alias string, address net.IP, siteId int) {
 		return
 	}
 	pm.dnsProxy.AddDNSRecord(alias, address, siteId)
-}
-
-func (pm *PeerManager) removeDNSRecord(alias string, address net.IP) {
-	if pm.dnsProxy == nil || pm.resourceRoutesSuppressed {
-		return
-	}
-	pm.dnsProxy.RemoveDNSRecord(alias, address)
 }
 
 func (pm *PeerManager) removeDNSRecordForSite(alias string, address net.IP, siteId int) {
@@ -873,7 +866,7 @@ func (pm *PeerManager) shouldPushAllowedIPLocked(cidr string) bool {
 //
 // Deliberately calls network.* and pm.dnsProxy directly rather than through
 // the addRoutes/removeRoutes/addServerRoute/removeServerRoute/addDNSRecord/
-// removeDNSRecord wrappers above: those are gated on resourceRoutesSuppressed,
+// removeDNSRecordForSite wrappers above: those are gated on resourceRoutesSuppressed,
 // which this function is itself in the middle of flipping - going through
 // them here would silently no-op the very removal this function exists to do.
 func (pm *PeerManager) suppressResourceRoutesLocked() {
@@ -1139,13 +1132,14 @@ func (pm *PeerManager) RemovePeer(siteId int) error {
 		}
 	}
 
-	// For aliases
+	// For aliases - only drop this site's ownership, so an alias another
+	// site still publishes keeps resolving
 	for _, alias := range peer.Aliases {
 		address := net.ParseIP(alias.AliasAddress)
 		if address == nil {
 			continue
 		}
-		pm.removeDNSRecord(alias.Alias, address)
+		pm.removeDNSRecordForSite(alias.Alias, address, siteId)
 	}
 
 	// Release all IP claims and promote other peers as needed. Scan
@@ -1240,13 +1234,13 @@ func (pm *PeerManager) UpdatePeer(siteConfig SiteConfig) error {
 	}
 
 	// Update aliases
-	// Remove old aliases
+	// Remove old aliases (only this site's ownership of each record)
 	for _, alias := range oldPeer.Aliases {
 		address := net.ParseIP(alias.AliasAddress)
 		if address == nil {
 			continue
 		}
-		pm.removeDNSRecord(alias.Alias, address)
+		pm.removeDNSRecordForSite(alias.Alias, address, siteConfig.SiteId)
 	}
 	// Add new aliases
 	for _, alias := range siteConfig.Aliases {
