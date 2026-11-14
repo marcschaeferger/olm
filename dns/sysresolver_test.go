@@ -3,6 +3,7 @@ package dns
 import (
 	"net/netip"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -145,5 +146,70 @@ func TestFilterUnreachable(t *testing.T) {
 	want := []string{"8.8.8.8:53"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("filterUnreachable() = %v, want %v", got, want)
+	}
+}
+
+func TestApplyCandidatesRevalidatesAfterFailedHealthCheck(t *testing.T) {
+	// The new DNS server is not answering yet when it is first reported (e.g.
+	// the link is still coming up) but starts answering shortly after. The
+	// unchanged candidate list must be re-probed on later polls instead of
+	// being cached as "already seen".
+	var mu sync.Mutex
+	probes := 0
+	stubReachable(t, func(server string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		probes++
+		return probes > 1
+	})
+
+	var got []string
+	m := &SystemDNSMonitor{
+		excludeIPs: make(map[netip.Addr]bool),
+		current:    []string{"10.0.0.1:53"},
+		onChange: func(servers []string) {
+			got = servers
+		},
+	}
+
+	for i := 0; i < 3; i++ {
+		m.applyCandidates([]string{"192.168.50.1:53"})
+	}
+
+	want := []string{"192.168.50.1:53"}
+	if !reflect.DeepEqual(m.Current(), want) {
+		t.Fatalf("Current() = %v, want %v once the server answers", m.Current(), want)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("onChange servers = %v, want %v", got, want)
+	}
+}
+
+func TestApplyCandidatesRevalidatesPartiallyReachableList(t *testing.T) {
+	// One of two candidates fails its first health check. Later polls with the
+	// same candidate list must re-probe it so it is picked up once it answers.
+	var mu sync.Mutex
+	failedOnce := false
+	stubReachable(t, func(server string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if server == "192.168.50.2:53" && !failedOnce {
+			failedOnce = true
+			return false
+		}
+		return true
+	})
+
+	m := &SystemDNSMonitor{excludeIPs: make(map[netip.Addr]bool)}
+
+	raw := []string{"192.168.50.1:53", "192.168.50.2:53"}
+	m.applyCandidates(raw)
+	if want := []string{"192.168.50.1:53"}; !reflect.DeepEqual(m.Current(), want) {
+		t.Fatalf("after first poll Current() = %v, want %v", m.Current(), want)
+	}
+
+	m.applyCandidates(raw)
+	if !reflect.DeepEqual(m.Current(), raw) {
+		t.Fatalf("after second poll Current() = %v, want %v", m.Current(), raw)
 	}
 }

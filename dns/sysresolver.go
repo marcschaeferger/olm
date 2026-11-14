@@ -187,6 +187,16 @@ func (m *SystemDNSMonitor) applyCandidates(raw []string) {
 
 	logger.Debug("System DNS candidates changed, health-checking: %v", raw)
 	validated := filterUnreachable(raw)
+	if len(validated) != len(raw) {
+		// Some candidates failed the health check. Forget this raw list so the
+		// next poll re-probes it instead of treating it as already handled;
+		// otherwise a server that starts answering later is never picked up.
+		m.mu.Lock()
+		if dnsSlicesEqual(m.lastRaw, raw) {
+			m.lastRaw = nil
+		}
+		m.mu.Unlock()
+	}
 	if len(validated) == 0 {
 		logger.Warn("None of the detected DNS servers answered a health-check query, keeping previous value: %v", raw)
 		return
