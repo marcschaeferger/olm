@@ -256,29 +256,7 @@ func runOlmMainWithArgs(ctx context.Context, cancel context.CancelFunc, signalCt
 	}
 
 	if config.ID != "" && config.Secret != "" && config.Endpoint != "" {
-		tunnelConfig := olmpkg.TunnelConfig{
-			Endpoint:                          config.Endpoint,
-			ID:                                config.ID,
-			Secret:                            config.Secret,
-			UserToken:                         config.UserToken,
-			MTU:                               config.MTU,
-			DNS:                               config.DNS,
-			UpstreamDNS:                       config.UpstreamDNS,
-			MatchDomains:                      config.MatchDomains,
-			InterfaceName:                     config.InterfaceName,
-			Holepunch:                         !config.DisableHolepunch,
-			TlsClientCert:                     config.TlsClientCert,
-			PingIntervalDuration:              config.PingIntervalDuration,
-			PingTimeoutDuration:               config.PingTimeoutDuration,
-			OrgID:                             config.OrgID,
-			OverrideDNS:                       config.OverrideDNS,
-			DisableRelay:                      config.DisableRelay,
-			PreferLocalRoutes:                 config.PreferLocalRoutes,
-			SubnetRouter:                      config.SubnetRouter,
-			DisableRoutesAndAliasesOnExitNode: config.DisableRoutesAndAliasesOnExitNode,
-			EnableUAPI:                        true,
-		}
-		go olm.StartTunnel(tunnelConfig)
+		go olm.StartTunnel(newTunnelConfig(config))
 	} else {
 		logger.Info("Incomplete tunnel configuration, not starting tunnel")
 	}
@@ -294,4 +272,31 @@ func runOlmMainWithArgs(ctx context.Context, cancel context.CancelFunc, signalCt
 	// Clean up resources
 	olm.Close()
 	logger.Info("Shutdown complete")
+}
+
+// newTunnelConfig builds the tunnel configuration from the loaded CLI config.
+func newTunnelConfig(config *OlmConfig) olmpkg.TunnelConfig {
+	return olmpkg.TunnelConfig{
+		Endpoint:                          config.Endpoint,
+		ID:                                config.ID,
+		Secret:                            config.Secret,
+		UserToken:                         config.UserToken,
+		MTU:                               config.MTU,
+		DNS:                               config.DNS,
+		UpstreamDNS:                       config.UpstreamDNS,
+		MatchDomains:                      config.MatchDomains,
+		InterfaceName:                     config.InterfaceName,
+		Holepunch:                         !config.DisableHolepunch,
+		TlsClientCert:                     config.TlsClientCert,
+		PingIntervalDuration:              config.PingIntervalDuration,
+		PingTimeoutDuration:               config.PingTimeoutDuration,
+		OrgID:                             config.OrgID,
+		OverrideDNS:                       config.OverrideDNS,
+		TunnelDNS:                         config.TunnelDNS,
+		DisableRelay:                      config.DisableRelay,
+		PreferLocalRoutes:                 config.PreferLocalRoutes,
+		SubnetRouter:                      config.SubnetRouter,
+		DisableRoutesAndAliasesOnExitNode: config.DisableRoutesAndAliasesOnExitNode,
+		EnableUAPI:                        true,
+	}
 }

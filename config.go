@@ -64,6 +64,10 @@ type OlmConfig struct {
 	// Source tracking (not in JSON)
 	sources map[string]string `json:"-"`
 
+	// overrideDNSSet records that a config file set overrideDNS explicitly,
+	// so an explicit false can win over the default of true.
+	overrideDNSSet bool
+
 	Version string
 }
 
@@ -202,6 +206,16 @@ func loadConfigFromFile() (*OlmConfig, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// Booleans whose default is true need presence tracking: the zero value
+	// alone cannot tell an explicit false from an omitted key.
+	var present struct {
+		OverrideDNS *bool `json:"overrideDNS"`
+	}
+	if err := json.Unmarshal(data, &present); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+	config.overrideDNSSet = present.OverrideDNS != nil
+
 	return &config, nil
 }
 
@@ -279,9 +293,13 @@ func loadConfigFromEnv(config *OlmConfig) {
 		config.DisableHolepunch = true
 		config.sources["disableHolepunch"] = string(SourceEnv)
 	}
-	if val := os.Getenv("OVERRIDE_DNS"); val == "true" {
-		config.OverrideDNS = true
-		config.sources["overrideDNS"] = string(SourceEnv)
+	if val := os.Getenv("OVERRIDE_DNS"); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			config.OverrideDNS = b
+			config.sources["overrideDNS"] = string(SourceEnv)
+		} else {
+			fmt.Printf("Invalid OVERRIDE_DNS value: %s, keeping current value\n", val)
+		}
 	}
 	if val := os.Getenv("DISABLE_RELAY"); val == "true" {
 		config.DisableRelay = true
@@ -291,9 +309,13 @@ func loadConfigFromEnv(config *OlmConfig) {
 		config.PreferLocalRoutes = true
 		config.sources["preferLocalRoutes"] = string(SourceEnv)
 	}
-	if val := os.Getenv("TUNNEL_DNS"); val == "true" {
-		config.TunnelDNS = true
-		config.sources["tunnelDNS"] = string(SourceEnv)
+	if val := os.Getenv("TUNNEL_DNS"); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			config.TunnelDNS = b
+			config.sources["tunnelDNS"] = string(SourceEnv)
+		} else {
+			fmt.Printf("Invalid TUNNEL_DNS value: %s, keeping current value\n", val)
+		}
 	}
 	if val := os.Getenv("SUBNET_ROUTER"); val == "true" {
 		config.SubnetRouter = true
@@ -582,9 +604,13 @@ func mergeConfigs(dest, src *OlmConfig) {
 		dest.DisableHolepunch = src.DisableHolepunch
 		dest.sources["disableHolepunch"] = string(SourceFile)
 	}
-	if src.OverrideDNS {
+	if src.OverrideDNS || src.overrideDNSSet {
 		dest.OverrideDNS = src.OverrideDNS
 		dest.sources["overrideDNS"] = string(SourceFile)
+	}
+	if src.TunnelDNS {
+		dest.TunnelDNS = src.TunnelDNS
+		dest.sources["tunnelDNS"] = string(SourceFile)
 	}
 	if src.DisableRelay {
 		dest.DisableRelay = src.DisableRelay
