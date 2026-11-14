@@ -419,6 +419,7 @@ func (o *Olm) handleTerminate(msg websocket.WSMessage) {
 	network.ClearNetworkSettings()
 
 	o.Close()
+	o.markTunnelStopped()
 
 	if o.olmConfig.OnTerminated != nil {
 		go o.olmConfig.OnTerminated()

@@ -639,12 +639,14 @@ func (o *Olm) StartTunnel(config TunnelConfig) {
 	)
 	if err != nil {
 		logger.Error("Failed to create olm: %v", err)
+		o.failStart()
 		return
 	}
 
 	// Create shared UDP socket and holepunch manager
 	if err := o.initTunnelInfo(id); err != nil {
 		logger.Error("%v", err)
+		o.failStart()
 		return
 	}
 
@@ -879,32 +881,7 @@ func (o *Olm) StartTunnel(config TunnelConfig) {
 		}
 	})
 
-	o.websocket.OnAuthError(func(statusCode int, message string) {
-		// Check if tunnel is still running
-		if !o.tunnelRunning {
-			logger.Debug("Tunnel stopped, ignoring auth error")
-			return
-		}
-
-		logger.Error("Authentication error (status %d): %s. Terminating tunnel.", statusCode, message)
-		o.apiServer.SetTerminated(true)
-		o.apiServer.SetConnectionStatus(false)
-		o.apiServer.SetRegistered(false)
-		o.apiServer.ClearOlmError()
-		o.apiServer.ClearPeerStatuses()
-		o.apiServer.SetGatewayStatus(false, 0, nil)
-		network.ClearNetworkSettings()
-
-		o.Close()
-
-		if o.olmConfig.OnAuthError != nil {
-			go o.olmConfig.OnAuthError(statusCode, message)
-		}
-
-		if o.olmConfig.OnTerminated != nil {
-			go o.olmConfig.OnTerminated()
-		}
-	})
+	o.websocket.OnAuthError(o.handleAuthError)
 
 	// Indicate that tunnel is starting
 	o.tunnelWg.Add(1)
@@ -913,13 +890,74 @@ func (o *Olm) StartTunnel(config TunnelConfig) {
 	// Connect to the WebSocket server
 	if err := o.websocket.Connect(); err != nil {
 		logger.Error("Failed to connect to server: %v", err)
+		o.failStart()
 		return
 	}
-	defer func() { _ = o.websocket.Close() }()
+	// Close the client this tunnel created: by the time a terminate or auth
+	// error cancels tunnelCtx, o.websocket may already belong to a new tunnel.
+	ws := o.websocket
+	defer func() { _ = ws.Close() }()
 
 	// Wait for context cancellation
 	<-tunnelCtx.Done()
 	logger.Info("Tunnel process context cancelled, cleaning up")
+}
+
+// handleAuthError tears the tunnel down when the server rejects the
+// websocket credentials.
+func (o *Olm) handleAuthError(statusCode int, message string) {
+	// Check if tunnel is still running
+	if !o.tunnelRunning {
+		logger.Debug("Tunnel stopped, ignoring auth error")
+		return
+	}
+
+	logger.Error("Authentication error (status %d): %s. Terminating tunnel.", statusCode, message)
+	o.apiServer.SetTerminated(true)
+	o.apiServer.SetConnectionStatus(false)
+	o.apiServer.SetRegistered(false)
+	o.apiServer.ClearOlmError()
+	o.apiServer.ClearPeerStatuses()
+	o.apiServer.SetGatewayStatus(false, 0, nil)
+	network.ClearNetworkSettings()
+
+	o.Close()
+	o.markTunnelStopped()
+
+	if o.olmConfig.OnAuthError != nil {
+		go o.olmConfig.OnAuthError(statusCode, message)
+	}
+
+	if o.olmConfig.OnTerminated != nil {
+		go o.olmConfig.OnTerminated()
+	}
+}
+
+// markTunnelStopped resets the tunnel lifecycle state when the tunnel ends
+// without going through StopTunnel (a failed start, a server terminate or an
+// auth error), so a later connect is not ignored as "already running" and
+// the next tunnel registers again. It also cancels the tunnel context so the
+// StartTunnel goroutine returns and releases tunnelWg.
+func (o *Olm) markTunnelStopped() {
+	o.registered = false
+	o.tunnelRunning = false
+	if o.tunnelCancel != nil {
+		o.tunnelCancel()
+	}
+}
+
+// failStart tears down a StartTunnel that returned early. By then the DNS
+// monitor is already polling on olmCtx and, depending on the stage, the
+// websocket client, shared bind and hole punch manager exist too; only Close
+// releases them, so a retried start would otherwise leak them every time.
+// The log file stays open: unlike StopTunnel at shutdown, the process keeps
+// running for a retry and the logger still writes to that file.
+func (o *Olm) failStart() {
+	logFile := o.logFile
+	o.logFile = nil
+	o.Close()
+	o.logFile = logFile
+	o.markTunnelStopped()
 }
 
 func (o *Olm) Close() {
