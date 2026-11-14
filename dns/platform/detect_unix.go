@@ -11,7 +11,8 @@ import (
 	"github.com/fosrl/newt/logger"
 )
 
-const defaultResolvConfPath = "/etc/resolv.conf"
+// defaultResolvConfPath is a variable so tests can point detection at a fixture.
+var defaultResolvConfPath = "/etc/resolv.conf"
 
 // DNSManagerType represents the type of DNS manager detected
 type DNSManagerType int
@@ -102,7 +103,6 @@ func DetectDNSManager(interfaceName string) DNSManagerType {
 			return SystemdResolvedManager
 		}
 		logger.Warn("dns platform: Found systemd-resolved but it is not running. Falling back to file...")
-		os.Exit(0)
 		return FileManager
 
 	case NetworkManagerManager:
